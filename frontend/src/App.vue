@@ -2,16 +2,15 @@
 import { ref } from 'vue'
 const question = ref('')
 const answer = ref('')
+const sources = ref<{index:number; content:string; similarity:number}[]>([])
 const loading = ref(false)
 
 async function ask() {
   if (!question.value.trim() || loading.value) return
-  answer.value = ''
-  loading.value = true
+  answer.value = ''; sources.value = []; loading.value = true
   try {
     const res = await fetch('http://localhost:8000/chat/stream', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ q: question.value }),
     })
     const reader = res.body!.getReader()
@@ -24,30 +23,31 @@ async function ask() {
       const frames = buffer.split('\n\n')
       buffer = frames.pop() || ''
       for (const frame of frames) {
-        if (!frame.startsWith('data: ')) continue
-        const data = frame.slice(6)
-        if (data === '[DONE]') { loading.value = false; return }
-        const obj = JSON.parse(data)
-        if (obj.token) answer.value += obj.token
+        const line = frame.replace(/^data: /, '').trim()
+        if (!line || line === '[DONE]') continue
+        try {
+          const d = JSON.parse(line)
+          if (d.sources) sources.value = d.sources        // 引用来源事件
+          else if (d.token) answer.value += d.token        // 正文流式追加
+          else if (d.error) answer.value += '\n[错误] ' + d.error
+        } catch { /* 忽略半帧 */ }
       }
     }
-  } catch (e) {
-    answer.value = '出错：' + String(e)
-  } finally {
-    loading.value = false
-  }
+  } finally { loading.value = false }
 }
 </script>
 
 <template>
-  <h2>售后知识 Copilot · Day1</h2>
-  <input v-model="question" placeholder="输入问题，回车发送" @keyup.enter="ask" />
-  <button @click="ask" :disabled="loading">{{ loading ? '生成中…' : '发送' }}</button>
-  <div class="answer">{{ answer }}</div>
+  <div class="box">
+    <h2>售后知识 Copilot</h2>
+    <input v-model="question" @keyup.enter="ask" placeholder="输入问题，如：退款多久到账" />
+    <button @click="ask" :disabled="loading">{{ loading ? '回答中...' : '提问' }}</button>
+    <pre class="answer">{{ answer }}</pre>
+    <div v-if="sources.length" class="sources">
+      <b>参考资料：</b>
+      <div v-for="s in sources" :key="s.index" class="src">
+        [{{ s.index }}] (相似度 {{ s.similarity.toFixed(2) }}) {{ s.content.slice(0, 60) }}...
+      </div>
+    </div>
+  </div>
 </template>
-
-<style scoped>
-input { width: 60%; padding: 8px; }
-button { padding: 8px 16px; margin-left: 8px; }
-.answer { margin-top: 16px; white-space: pre-wrap; line-height: 1.7; }
-</style>

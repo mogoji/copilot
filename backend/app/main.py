@@ -31,6 +31,8 @@ import os, json, httpx
 # 将项目 .env 文件中的配置加载到进程环境变量，供后续读取 API 密钥。
 from dotenv import load_dotenv
 load_dotenv()
+# 导入 RAG 检索函数：提问先从 pgvector 知识库找证据，再交给 GLM 回答。
+from app.rag import retrieve
 
 # 上游 GLM 对话接口地址。
 GLM_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
@@ -40,56 +42,62 @@ GLM_MODEL = "glm-5.3-flash"
 # 注册 POST /chat/stream 接口，将前端请求转发给上游模型并流式返回结果。
 @app.post("/chat/stream")
 async def chat(body: dict):
-    # 定义异步生成器；StreamingResponse 消费它时，会逐段发送生成的数据。
+    question = body.get("q", "")
+
+    # ① 检索证据
+    hits = retrieve(question, top_k=5)
+    # 只保留相似度达标的证据（简单阈值，过滤明显不相关的）
+    good = [h for h in hits if h["similarity"] >= 0.35]
+    # 拼成带编号的资料块
+    evidence = "\n".join(
+        f"[{i}] {h['content']}" for i, h in enumerate(good, 1)
+    )
+    sources = [{"index": i, "content": h["content"], "similarity": h["similarity"]}
+               for i, h in enumerate(good, 1)]
+
+    # ② 拼 prompt：明确要求"只根据资料回答 + 标引用编号 + 无资料就说不知道"
+    system = (
+        "你是售后客服助手。只能根据下面的资料回答问题，回答时标注引用编号如[1]。"
+        "如果资料里没有相关信息，直接说『抱歉，资料中没有相关信息，建议联系人工客服』，不要编造。\n\n"
+        f"资料：\n{evidence if evidence else '（无相关资料）'}"
+    )
+
     async def gen():
-        # 设置上游接口所需的认证信息和 JSON 请求类型。
+        if sources:
+            # 先发引用来源事件，让前端能显示出处
+            yield f'data: {json.dumps({"sources": sources}, ensure_ascii=False)}\n\n'
         headers = {
-            # 从环境变量 GLM_API_KEY 读取密钥，并作为 Bearer Token 发送。
             "Authorization": f"Bearer {os.getenv('GLM_API_KEY')}",
             "Content-Type": "application/json",
         }
-        # 构造上游请求：启用流式响应，并把请求体中的 q 作为用户消息。
-        # 若请求体没有 q，则使用空字符串。
         payload = {
             "model": GLM_MODEL,
             "stream": True,
-            "messages": [{"role": "user", "content": body.get("q", "")}],
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": question},
+            ],
         }
         try:
-            # 创建异步 HTTP 客户端，单次请求超时时间为 60 秒。
             async with httpx.AsyncClient(timeout=60) as client:
-                # 向上游发送 POST 请求；stream() 允许边接收响应边处理内容。
                 async with client.stream("POST", GLM_URL, headers=headers, json=payload) as r:
-                    # 按行读取上游响应，避免等待完整响应体下载完成。
                     async for line in r.aiter_lines():
-                        # 忽略非 SSE 数据行，只处理以 data: 开头的事件内容。
                         if not line.startswith("data: "):
                             continue
-                        # 去掉 SSE 的 data: 前缀，取得事件的数据部分。
                         chunk = line[6:]
-                        # 上游用 [DONE] 表示生成结束；收到后停止读取响应。
                         if chunk.strip() == "[DONE]":
                             break
                         try:
-                            # 将事件数据从 JSON 字符串解析为 Python 对象。
                             d = json.loads(chunk)
                         except json.JSONDecodeError:
-                            # 忽略格式错误的事件数据，继续处理后续事件。
                             continue
-                        # 读取候选回答列表；字段缺失或为空时按空列表处理。
                         choices = d.get("choices") or []
                         if not choices:
                             continue
-                        # 从第一个候选项的增量内容中取得本次新生成的文本片段。
                         token = (choices[0].get("delta") or {}).get("content") or ""
                         if token:
-                            # 将文本片段包装为前端约定的 JSON SSE 事件后立即发送。
-                            # ensure_ascii=False 保留中文等非 ASCII 字符。
                             yield f'data: {json.dumps({"token": token}, ensure_ascii=False)}\n\n'
         except Exception as e:
-            # 将请求或流处理期间发生的异常作为 SSE 错误事件发给前端。
             yield f'data: {json.dumps({"error": str(e)}, ensure_ascii=False)}\n\n'
-        # 正常结束或异常被处理后，发送统一的流结束标记。
         yield "data: [DONE]\n\n"
-    # 返回 SSE 流式响应，浏览器可逐段接收生成内容。
     return StreamingResponse(gen(), media_type="text/event-stream")
