@@ -1,0 +1,50 @@
+"""检索层评测：只测 retrieve，不调 GLM，快且省钱。"""
+import json
+import sys
+from pathlib import Path
+
+# 路径自举：用 `python app/eval_retrieval.py` 直接运行时，Python 只把 app/ 加入
+# 搜索路径，导致 `from app.rag import ...` 找不到包。把 backend/ 显式加进去，
+# 这样无论从哪个目录、用哪种方式运行都能导入成功。
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from app.rag import retrieve
+
+def load_cases(path=None):
+    # 同样用基于脚本位置的绝对路径，避免换目录运行时找不到文件。
+    path = path or (Path(__file__).resolve().parent / "data" / "eval.jsonl")
+    return [json.loads(l) for l in open(path, encoding="utf-8") if l.strip()]
+
+def evaluate(top_k=5, reject_th=0.65):
+    cases = load_cases()
+    # hit_ok 命中数、hit_total 应命中总数
+    # rej_ok 拒答数、rej_total 应拒答数
+    hit_ok = hit_total = rej_ok = rej_total = 0
+    rr_sum = 0.0
+    for c in cases:
+        hits = retrieve(c["q"], top_k=top_k)
+        texts = [h["content"] for h in hits]
+        # 获取最高相似度
+        top_score = hits[0]["similarity"] if hits else 0.0
+        if c["expect"] in ("hit", "boundary"):
+            hit_total += 1
+            gold = c.get("gold", "")
+            # 取第一个命中的名次
+            rank = next((i + 1 for i, t in enumerate(texts) if gold in t), None)
+            if rank:
+                hit_ok += 1
+                # 命中得分
+                rr_sum += 1.0 / rank
+        else:  # reject
+            rej_total += 1
+            if top_score < reject_th:   # top1 相似度小于拒答阈值，拒答数+1
+                rej_ok += 1
+    return {
+        "n": len(cases),
+        "recall@5": round(hit_ok / hit_total, 3) if hit_total else 0, # 召回率
+        "mrr": round(rr_sum / hit_total, 3) if hit_total else 0, #  平均命中得分
+        "retrievable_reject": round(rej_ok / rej_total, 3) if rej_total else 0, #可拒答率
+    }
+
+if __name__ == "__main__":
+    print(json.dumps(evaluate(), ensure_ascii=False, indent=2))

@@ -1,6 +1,55 @@
-{"q": "退款多久到账？", "expect": "hit", "note": "应有引用且含3-5个工作日"}
-{"q": "怎么申请退款？", "expect": "hit", "note": "应命中退款流程"}
-{"q": "忘记密码怎么办", "expect": "hit", "note": "应命中重置密码"}
-{"q": "如何开具发票", "expect": "hit", "note": "应命中发票流程"}
-{"q": "今天天气怎么样", "expect": "reject", "note": "应拒答"}
-{"q": "你们公司年会什么时候开", "expect": "reject", "note": "应拒答"}
+{"q":"退款多久到账？","expect":"hit","gold":"3-5个工作日","note":"FAQ#2 原文问法"}
+{"q":"钱什么时候能退回来","expect":"hit","gold":"3-5个工作日","note":"同义改写，测语义检索"}
+{"q":"我要退货，运费算谁的","expect":"hit","gold":"运费","note":"FAQ#15 口语化改写"}
+{"q":"忘记密码了，登不进去","expect":"hit","gold":"重置密码","note":"FAQ#4 口语化改写"}
+{"q":"能开发票吗，要专票","expect":"hit","gold":"增值税专票","note":"FAQ#5 省略问法"}
+{"q":"地址写错了，货还没发","expect":"hit","gold":"修改地址","note":"FAQ#3 场景化问法"}
+{"q":"东西坏了，签收时发现破损","expect":"hit","gold":"拒收","note":"FAQ#14 场景化问法"}
+{"q":"会员有什么好处","expect":"hit","gold":"免运费","note":"FAQ#6 同义改写"}
+{"q":"怎么用优惠券抵扣","expect":"hit","gold":"优惠券","note":"FAQ#11"}
+{"q":"怎么联系人工客服","expect":"hit","gold":"客服热线","note":"FAQ#12"}
+{"q":"怎么发起退款申请？","expect":"hit","gold":"申请退款","note":"FAQ#1 原文问法，覆盖此前未测的申请流程"}
+{"q":"刚下的单不想要了，能取消吗","expect":"hit","gold":"直接取消","note":"FAQ#7 口语化改写"}
+{"q":"收到的商品有瑕疵怎么办","expect":"hit","gold":"质量退换","note":"FAQ#8 场景化问法"}
+{"q":"我的快递到哪了","expect":"hit","gold":"实时轨迹","note":"FAQ#9 口语化改写"}
+{"q":"能用微信付款吗","expect":"hit","gold":"微信支付","note":"FAQ#10 省略问法"}
+{"q":"可以收到货再付钱吗","expect":"hit","gold":"货到付款","note":"FAQ#13 场景化问法"}
+{"q":"手机号换了怎么改绑定","expect":"hit","gold":"安全中心","note":"FAQ#16 口语化改写"}
+{"q":"积分有什么用，能当钱花吗","expect":"hit","gold":"抵扣现金","note":"FAQ#17 同义改写"}
+{"q":"能寄到国外吗","expect":"hit","gold":"中国大陆","note":"FAQ#18 场景化问法，答案应说明仅大陆配送"}
+{"q":"买完降价了能补差价吗","expect":"hit","gold":"退还差价","note":"FAQ#19 口语化改写"}
+{"q":"发票上的抬头写错了","expect":"hit","gold":"红冲","note":"FAQ#20 场景化问法"}
+{"q":"退款申请提交后要填什么","expect":"hit","gold":"填写原因","note":"FAQ#1 第二种问法，测同一资料不同切入点"}
+{"q":"钱退回来要等几天","expect":"hit","gold":"3-5个工作日","note":"FAQ#2 第二种口语化改写"}
+{"q":"订单发了还能改收货地址吗","expect":"hit","gold":"修改地址","note":"FAQ#3 第二种问法，含已发货边界"}
+{"q":"登录密码忘了，手机号验证能找回吗","expect":"hit","gold":"重置密码","note":"FAQ#4 第二种问法"}
+{"q":"电子发票多久能收到","expect":"hit","gold":"24小时","note":"FAQ#5 第二种问法，测时效细节"}
+{"q":"会员有没有优先客服","expect":"hit","gold":"优先客服","note":"FAQ#6 第二种问法，测次要信息"}
+{"q":"两张优惠券能一起用吗","expect":"hit","gold":"不可叠加","note":"FAQ#11 第二种问法，测否定表述"}
+{"q":"客服电话是多少","expect":"hit","gold":"客服热线","note":"FAQ#12 第二种问法"}
+{"q":"收货时包裹破了怎么处理","expect":"hit","gold":"拒收","note":"FAQ#14 第二种问法"}
+{"q":"退货是不是要我自己掏邮费","expect":"boundary","gold":"运费","note":"边界：与 FAQ#15 相关但表述绕"}
+{"q":"东西不想要了能退吗","expect":"boundary","gold":"退款","note":"边界：措辞模糊，需区分退款/退货流程"}
+{"q":"下单填的地址能换一下吗","expect":"boundary","gold":"修改地址","note":"边界：FAQ#3 场景化改写"}
+{"q":"登录进不去了怎么办","expect":"boundary","gold":"重置密码","note":"边界：未点明密码，测试语义关联"}
+{"q":"买东西给的票怎么开","expect":"boundary","gold":"开票","note":"边界：口语化指代发票"}
+{"q":"VIP有什么特权","expect":"boundary","gold":"免运费","note":"边界：会员的同义说法"}
+{"q":"不想要了这个订单怎么弄掉","expect":"boundary","gold":"直接取消","note":"边界：口语化，语义相关但绕"}
+{"q":"收到货有瑕疵找谁换","expect":"boundary","gold":"换新","note":"边界：FAQ#8 场景化改写"}
+{"q":"包裹走到哪儿了能看到吗","expect":"boundary","gold":"实时轨迹","note":"边界：FAQ#9 口语化"}
+{"q":"付款方式都有哪些","expect":"boundary","gold":"支付宝","note":"边界：FAQ#10 泛化问法"}
+{"q":"换了个电话号码怎么绑定","expect":"boundary","gold":"更换绑定手机号","note":"边界：FAQ#16 场景化改写"}
+{"q":"攒的积分能换钱不","expect":"boundary","gold":"抵扣现金","note":"边界：FAQ#17 口语化"}
+{"q":"几个抵一个的那种抵扣咋算","expect":"boundary","gold":"100积分抵1元","note":"边界：只描述规则不求名称，测细节召回"}
+{"q":"东西坏了在几天内能换","expect":"boundary","gold":"7天内","note":"边界：FAQ#8 时效细节改写"}
+{"q":"买的便宜了后来降价找谁","expect":"boundary","gold":"价保","note":"边界：FAQ#19 场景化改写"}
+{"q":"今天天气怎么样","expect":"reject","note":"无关，应拒答"}
+{"q":"你们公司年会什么时候开","expect":"reject","note":"无关，应拒答"}
+{"q":"股票600519走势如何","expect":"reject","note":"无关，应拒答"}
+{"q":"帮我写一首关于秋天的诗","expect":"reject","note":"无关，应拒答"}
+{"q":"你们公司几点下班","expect":"reject","note":"无关，应拒答"}
+{"q":"推荐一下今天吃什么","expect":"reject","note":"无关，应拒答"}
+{"q":"手机怎么截屏","expect":"reject","note":"无关操作类问题，应拒答"}
+{"q":"明天的彩票号码是多少","expect":"reject","note":"无关且不可预测，应拒答"}
+{"q":"附近的餐厅哪家好吃","expect":"reject","note":"无关本地生活问题，应拒答"}
+{"q":"怎么学Python编程","expect":"reject","note":"无关技术学习问题，应拒答"}
