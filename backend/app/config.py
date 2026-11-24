@@ -29,6 +29,11 @@ HEADERS = {
 # ---- 检索阈值 ----
 # 证据阈值：低于此相似度的检索结果不喂给模型（防幻觉第一道闸）。
 EVIDENCE_TH = float(os.getenv("EVIDENCE_TH", "0.60"))
+# 客户端可通过 evidence_th 传入阈值，但会被 clamp 到 [MIN, MAX]，
+# 防止传 0 绕过拒答防线、喂入低质量证据导致幻觉。
+# 如需复现 0.35 基线评测，可临时把 EVIDENCE_TH_MIN 调低（例如 0.3）。
+EVIDENCE_TH_MIN = float(os.getenv("EVIDENCE_TH_MIN", "0.40"))
+EVIDENCE_TH_MAX = float(os.getenv("EVIDENCE_TH_MAX", "0.85"))
 
 # ---- 超时（秒） ----
 HTTP_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "60"))
@@ -45,12 +50,22 @@ DB_DSN = os.getenv("DATABASE_URL") or (
     f"password={os.getenv('DB_PASSWORD', '')}"
 )
 
+# ---- 数据库连接池 ----
+DB_POOL_MIN = int(os.getenv("DB_POOL_MIN", "1"))
+DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "10"))
+
 # ---- CORS ----
 ALLOWED_ORIGINS = [
     o.strip()
     for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
     if o.strip()
 ]
+
+
+def clamp_evidence_th(value: float | None) -> float:
+    """把阈值限制在 [EVIDENCE_TH_MIN, EVIDENCE_TH_MAX] 安全范围内。"""
+    base = EVIDENCE_TH if value is None else float(value)
+    return max(EVIDENCE_TH_MIN, min(EVIDENCE_TH_MAX, base))
 
 
 def validate() -> None:

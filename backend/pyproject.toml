@@ -10,9 +10,9 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.165.0",
     "httpx>=0.28.1",
+    "psycopg-pool>=3.3.3",
     "psycopg[binary]>=3.3.9",
     "python-dotenv>=1.2.4",
-    "sse-starlette>=3.7.0",
     "uvicorn>=0.54.0",
 ]
 

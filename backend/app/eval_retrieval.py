@@ -1,12 +1,10 @@
-"""检索层评测：只测 retrieve，不调 GLM，快且省钱。"""
-import json
-import sys
-from pathlib import Path
+"""检索层评测：只测 retrieve，不调 GLM，快且省钱。
 
-# 路径自举：用 `python app/eval_retrieval.py` 直接运行时，Python 只把 app/ 加入
-# 搜索路径，导致 `from app.rag import ...` 找不到包。把 backend/ 显式加进去，
-# 这样无论从哪个目录、用哪种方式运行都能导入成功。
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+运行方式（backend 根目录）：
+    python -m app.eval_retrieval
+"""
+import json
+from pathlib import Path
 
 from app.rag import retrieve
 
@@ -47,4 +45,9 @@ def evaluate(top_k=5, reject_th=0.65):
     }
 
 if __name__ == "__main__":
-    print(json.dumps(evaluate(), ensure_ascii=False, indent=2))
+    from app import rag
+
+    try:
+        print(json.dumps(evaluate(), ensure_ascii=False, indent=2))
+    finally:
+        rag.close()
