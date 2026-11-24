@@ -8,13 +8,16 @@ from fastapi.responses import StreamingResponse
 # 跨域中间件允许浏览器前端从不同源访问本服务。
 from fastapi.middleware.cors import CORSMiddleware
 
+# 集中配置（在创建应用 / 注册中间件前导入，CORS 等需要读取配置）
+from app import config
+
 # 创建 FastAPI 应用实例，后续路由和中间件都注册到该实例上。
 app = FastAPI()
 # 注册 CORS 中间件：允许本地前端开发服务器跨域访问。
 app.add_middleware(
     CORSMiddleware,
     # 仅允许来自该前端地址的跨域请求。
-    allow_origins=["http://localhost:5173"],
+    allow_origins=config.ALLOWED_ORIGINS,
     # 允许所有 HTTP 方法和请求头。
     allow_methods=["*"],
     allow_headers=["*"],
@@ -26,23 +29,13 @@ def health():
     # 返回 JSON 对象，表示服务状态正常。
     return {"ok": True}
 
-# os 用于读取环境变量；httpx 用于异步请求上游模型服务；json 用于处理流数据。
-import os, json, httpx
-# 将项目 .env 文件中的配置加载到进程环境变量，供后续读取 API 密钥。
-from dotenv import load_dotenv
-load_dotenv()
+# httpx 用于异步请求上游模型服务；json 用于处理流数据。
+import httpx
 # 导入 RAG 检索函数：提问先从 pgvector 知识库找证据，再交给 GLM 回答。
 from app.rag import retrieve
 
-# 上游 GLM 对话接口地址。
-GLM_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
-# 要请求的 GLM 模型名称。
-GLM_MODEL = "glm-5.3-flash"
-
-# 【阈值校准】证据阈值：低于此相似度的检索结果不喂给模型（防幻觉第一道闸）。
-# 依据：55 条评测集实测，命中类相似度 ≥0.74、拒答类 ≤0.56，0.60 是最优分界。
-# 调参经验：调到 0.8 可能误杀措辞不同的正确资料（边界类掉分），需用 eval_retrieval.py 反复校准。
-EVIDENCE_TH = 0.60
+# 上游地址 / 模型 / 证据阈值均由 app.config 集中管理，可通过环境变量覆盖。
+# 证据阈值 EVIDENCE_TH 默认 0.60 的标定依据见 config.py；调参用 eval_retrieval.py 反复校准。
 
 # 注册 POST /chat/stream 接口，将前端请求转发给上游模型并流式返回结果。
 @app.post("/chat/stream")
@@ -51,7 +44,7 @@ async def chat(body: dict):
     # ① 检索证据
     hits = retrieve(question, top_k=5)
    
-    th = float(body.get("evidence_th", EVIDENCE_TH))
+    th = float(body.get("evidence_th", config.EVIDENCE_TH))
     good = [h for h in hits if h["similarity"] >= th]
     # 拼成带编号的资料块
     evidence = "\n".join(
@@ -72,11 +65,11 @@ async def chat(body: dict):
             # 先发引用来源事件，让前端能显示出处
             yield f'data: {json.dumps({"sources": sources}, ensure_ascii=False)}\n\n'
         headers = {
-            "Authorization": f"Bearer {os.getenv('GLM_API_KEY')}",
+            "Authorization": f"Bearer {config.GLM_API_KEY}",
             "Content-Type": "application/json",
         }
         payload = {
-            "model": GLM_MODEL,
+            "model": config.GLM_MODEL,
             "stream": True,
             "messages": [
                 {"role": "system", "content": system},
@@ -85,7 +78,7 @@ async def chat(body: dict):
         }
         try:
             async with httpx.AsyncClient(timeout=60) as client:
-                async with client.stream("POST", GLM_URL, headers=headers, json=payload) as r:
+                async with client.stream("POST", config.GLM_URL, headers=headers, json=payload) as r:
                     async for line in r.aiter_lines():
                         if not line.startswith("data: "):
                             continue

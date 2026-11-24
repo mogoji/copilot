@@ -1,16 +1,24 @@
 """把 faq.json 切片、向量化，灌进 pgvector。可重复执行（先清空再入库）。"""
-import os, json, httpx, psycopg
-from dotenv import load_dotenv
-load_dotenv()
+import json
 
-EMB_URL = "https://open.bigmodel.cn/api/paas/v4/embeddings"
-HEADERS = {"Authorization": f"Bearer {os.getenv('GLM_API_KEY')}", "Content-Type": "application/json"}
-DB_DSN = "host=localhost port=5432 dbname=copilot user=copilot password=copilot123"
+import httpx
+import psycopg
+
+from app import config
+
 
 def embed(texts):
-    """调 embedding-3 批量向量化，返回向量列表。"""
-    r = httpx.post(EMB_URL, headers=HEADERS,
-                   json={"model": "embedding-3", "input": texts, "dimensions": 1024}, timeout=60)
+    """调 embedding 接口批量向量化，返回向量列表。"""
+    r = httpx.post(
+        config.EMB_URL,
+        headers=config.HEADERS,
+        json={
+            "model": config.EMBEDDING_MODEL,
+            "input": texts,
+            "dimensions": config.EMBEDDING_DIMENSIONS,
+        },
+        timeout=config.HTTP_TIMEOUT,
+    )
     d = r.json()
     if "data" not in d:
         raise RuntimeError(f"embedding 失败: {d}")
@@ -23,7 +31,7 @@ def main():
     print(f"共 {len(texts)} 条切片，开始向量化...")
     vectors = embed(texts)  # 20 条一次请求够用；量大时要分批（单请求上限约64条）
 
-    with psycopg.connect(DB_DSN) as conn:
+    with psycopg.connect(config.DB_DSN) as conn:
         with conn.cursor() as cur:
             cur.execute("TRUNCATE chunks, documents RESTART IDENTITY CASCADE")
             for f, text, vec in zip(faqs, texts, vectors):

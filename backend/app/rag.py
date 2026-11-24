@@ -1,18 +1,23 @@
 """RAG 核心：把问题向量化，去 pgvector 检索最相关的切片。"""
-import os, httpx, psycopg
+import httpx
+import psycopg
 from collections import defaultdict
-from dotenv import load_dotenv
-load_dotenv()
 
-EMB_URL = "https://open.bigmodel.cn/api/paas/v4/embeddings"
-HEADERS = {"Authorization": f"Bearer {os.getenv('GLM_API_KEY')}", "Content-Type": "application/json"}
-DB_DSN = "host=localhost port=5432 dbname=copilot user=copilot password=copilot123"
+from app import config
 
 
 def embed_one(text):
-    """把单条文本向量化为 1024 维向量。"""
-    r = httpx.post(EMB_URL, headers=HEADERS,
-                   json={"model": "embedding-3", "input": text, "dimensions": 1024}, timeout=30)
+    """把单条文本向量化为指定维度向量。"""
+    r = httpx.post(
+        config.EMB_URL,
+        headers=config.HEADERS,
+        json={
+            "model": config.EMBEDDING_MODEL,
+            "input": text,
+            "dimensions": config.EMBEDDING_DIMENSIONS,
+        },
+        timeout=config.EMBED_TIMEOUT,
+    )
     return r.json()["data"][0]["embedding"]
 
 
@@ -20,7 +25,7 @@ def retrieve(question, top_k=5):
     """返回与 question 最相关的 top_k 条切片，每条含 content 和相似度。"""
     vec = embed_one(question)
     vec_str = "[" + ",".join(str(x) for x in vec) + "]"
-    with psycopg.connect(DB_DSN) as conn:
+    with psycopg.connect(config.DB_DSN) as conn:
         with conn.cursor() as cur:
             # <=> 是 pgvector 的余弦距离算子；1 - 距离 = 相似度（越接近 1 越相关）。
             cur.execute(
@@ -43,7 +48,7 @@ def retrieve_keyword(question, top_k=10):
         return {s[i:i + 2] for i in range(len(s) - 1)}
 
     qg = bigrams(question)
-    with psycopg.connect(DB_DSN) as conn:
+    with psycopg.connect(config.DB_DSN) as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT doc_id, content FROM chunks")
             rows = cur.fetchall()
