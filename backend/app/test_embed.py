@@ -11,8 +11,9 @@ headers = {
 payload = {"model": "embedding-3", "input": "how to request a refund", "dimensions": 1024}
 r = httpx.post(url, headers=headers, json=payload, timeout=30)
 d = r.json()
+print(r,'fan绘制',d)
 if "data" not in d:
     print("ERROR:", d)
 else:
     vec = d["data"][0]["embedding"]
-    print("维度:", len(vec), "| 前3个:", [round(x, 4) for x in vec[:3]])
+    # print("维度:", len(vec), "| 前3个:", [round(x, 4) for x in vec[:3]])

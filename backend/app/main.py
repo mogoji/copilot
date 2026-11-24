@@ -39,15 +39,20 @@ GLM_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 # 要请求的 GLM 模型名称。
 GLM_MODEL = "glm-5.3-flash"
 
+# 【阈值校准】证据阈值：低于此相似度的检索结果不喂给模型（防幻觉第一道闸）。
+# 依据：55 条评测集实测，命中类相似度 ≥0.74、拒答类 ≤0.56，0.60 是最优分界。
+# 调参经验：调到 0.8 可能误杀措辞不同的正确资料（边界类掉分），需用 eval_retrieval.py 反复校准。
+EVIDENCE_TH = 0.60
+
 # 注册 POST /chat/stream 接口，将前端请求转发给上游模型并流式返回结果。
 @app.post("/chat/stream")
 async def chat(body: dict):
     question = body.get("q", "")
-
     # ① 检索证据
     hits = retrieve(question, top_k=5)
-    # 只保留相似度达标的证据（简单阈值，过滤明显不相关的）
-    good = [h for h in hits if h["similarity"] >= 0.35]
+   
+    th = float(body.get("evidence_th", EVIDENCE_TH))
+    good = [h for h in hits if h["similarity"] >= th]
     # 拼成带编号的资料块
     evidence = "\n".join(
         f"[{i}] {h['content']}" for i, h in enumerate(good, 1)

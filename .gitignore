@@ -6,6 +6,6 @@ dist/
 .DS_Store
 *.pyc
 .pytest_cache/
-
+test.py
 # 开发日志（按用户要求，不纳入 Git 追踪）
 README.md
