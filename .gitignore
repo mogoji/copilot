@@ -7,5 +7,7 @@ dist/
 *.pyc
 .pytest_cache/
 test.py
-# 开发日志（按用户要求，不纳入 Git 追踪）
-README.md
+
+# 开发日志与过程截图：仅本地留存，不纳入 Git 追踪
+logs.md
+.screenshots/
