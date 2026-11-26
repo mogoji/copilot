@@ -6,6 +6,7 @@
 import json
 from pathlib import Path
 
+from app import config
 from app.rag import retrieve
 
 def load_cases(path=None):
@@ -13,7 +14,10 @@ def load_cases(path=None):
     path = path or (Path(__file__).resolve().parent / "data" / "eval.jsonl")
     return [json.loads(l) for l in open(path, encoding="utf-8") if l.strip()]
 
-def evaluate(top_k=5, reject_th=0.65):
+def evaluate(top_k=5, reject_th=None):
+    # 拒答阈值默认取 config.EVIDENCE_TH，与线上检索证据阈值保持单一来源；
+    # 需要复现历史基线时仍可显式传参覆盖。
+    reject_th = config.EVIDENCE_TH if reject_th is None else reject_th
     cases = load_cases()
     # hit_ok 命中数、hit_total 应命中总数
     # rej_ok 拒答数、rej_total 应拒答数
