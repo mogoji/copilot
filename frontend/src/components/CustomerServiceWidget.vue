@@ -9,7 +9,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { CircleAlert, LoaderCircle, Send, Square, X } from 'lucide-vue-next'
 import robotUrl from '@/assets/robot.png'
-import { TOKEN_KEY } from '@/api/request'
+import { AUTH_KEY, TOKEN_KEY } from '@/api/request'
 
 type SourceItem = { index: number; content: string; similarity: number }
 
@@ -182,6 +182,16 @@ async function send(text?: string) {
 
     if (!res.ok || !res.body) {
       const detail = await res.json().catch(() => null)
+      // 对话接口需要登录：token 缺失/过期时清理登录态并跳登录页
+      // （SSE 走原生 fetch，不经过 axios 的 401 拦截器，需在此单独处理）
+      if (res.status === 401) {
+        localStorage.removeItem(TOKEN_KEY)
+        sessionStorage.removeItem(TOKEN_KEY)
+        localStorage.removeItem(AUTH_KEY)
+        sessionStorage.removeItem(AUTH_KEY)
+        window.location.href = '/login'
+        return
+      }
       throw new Error(detail?.message || `服务返回异常（${res.status}）`)
     }
 

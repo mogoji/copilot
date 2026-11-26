@@ -1,20 +1,22 @@
-"""售后客服助手后端：提供健康检查与流式对话接口。"""
+"""售后客服助手后端：提供健康检查与流式对话接口（对话需登录）。"""
 import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
+from typing import Annotated
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 
 from app import auth
 from app import config
 from app import db
 from app import rag
+from app.deps import get_current_user
 
 # 日志：仅在根 logger 尚无 handler 时初始化，避免覆盖 uvicorn 的日志配置
 if not logging.getLogger().handlers:
@@ -25,8 +27,15 @@ if not logging.getLogger().handlers:
 logger = logging.getLogger("app.main")
 
 
+# 提问字符串约束：先 strip 再校验，空串/纯空格直接 422。
+# 只加 max_length 挡不住"纯空格"——strip 后变空串仍会触发 embedding + GLM 调用白烧钱。
+QuestionStr = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)
+]
+
+
 class ChatRequest(BaseModel):
-    q: str = Field(..., description="用户问题")
+    q: QuestionStr = Field(..., description="用户问题（1-500 字，自动去首尾空白）")
     evidence_th: float | None = Field(
         None, description="可选：证据相似度阈值，将被限制在服务端允许范围内"
     )
@@ -67,6 +76,8 @@ async def http_exception_handler(request, exc: HTTPException):
     return JSONResponse(
         status_code=exc.status_code,
         content={"code": exc.status_code, "message": str(exc.detail), "data": None},
+        # 透传 WWW-Authenticate 等响应头，401 时才符合 HTTP 规范
+        headers=getattr(exc, "headers", None),
     )
 
 
@@ -109,15 +120,16 @@ def health():
 
 
 @app.post("/chat/stream")
-async def chat(req: ChatRequest):
-    question = req.q.strip()
+async def chat(req: ChatRequest, current_user: dict = Depends(get_current_user)):
+    # 接口需要登录：令牌由 deps.get_current_user 校验，非法/过期直接 401
+    question = req.q
     th = _resolve_threshold(req.evidence_th)
 
     # ① 检索证据：同步函数放到工作线程执行，不阻塞事件循环；DB 走连接池复用
     try:
         hits = await asyncio.to_thread(rag.retrieve, question, top_k=5)
     except Exception:
-        logger.exception("检索失败 question=%r", question)
+        logger.exception("检索失败 user=%s question=%r", current_user.get("sub"), question)
 
         async def gen_err():
             yield _sse({"error": "检索服务暂不可用，请稍后重试"})
