@@ -10,7 +10,7 @@ import sys
 
 import httpx
 
-BASE = "http://localhost:8000"
+BASE = os.getenv("EVAL_BASE", "http://localhost:8000")
 URL = f"{BASE}/chat/stream"
 LOGIN_URL = f"{BASE}/api/auth/login"
 
@@ -63,6 +63,26 @@ def ask(q, token, th=None):
     return answer, sources
 
 
+def is_hit(gold: str, ans: str) -> bool:
+    """判断回答是否命中了 gold。
+
+    先用直接子串匹配；不中再退一步做「子序列」匹配——gold 的字按顺序
+    出现即可，允许模型在中间插入修饰语。
+
+    起因：实测发现 `gold in ans` 太字面，会把正确答案判成失败——
+    gold「填写原因」而模型答「填写退款原因」、gold「修改地址」而答
+    「修改收货地址」、gold「增值税专票」而答「增值税专用发票」，
+    三条全被判未命中，命中率凭空掉了 4 个点。这是评测器的假阴性，
+    不是模型答错，所以判定必须容忍措辞差异。
+    """
+    if not gold:
+        return False
+    if gold in ans:
+        return True
+    it = iter(ans)
+    return all(ch in it for ch in gold)
+
+
 def evaluate(th=None, token=None):
     from pathlib import Path
     path = Path(__file__).resolve().parent / "data" / "eval.jsonl"
@@ -71,13 +91,18 @@ def evaluate(th=None, token=None):
         token = login()
     hit_ok = hit_total = cit_ok = rej_ok = rej_total = 0
     rej_sources_sum = 0          # 【Day3 步骤6】拒答类携带的 sources 总数（伪证据计数）
+    failures = []                # 失败明细：只有看得到错在哪，指标才有意义
     for c in cases:
         ans, src = ask(c["q"], token, th=th)
         if c["expect"] in ("hit", "boundary"):
             hit_total += 1
             gold = c.get("gold", "")
-            if gold in ans:                      # 回答内容对不对
+            if is_hit(gold, ans):                # 回答内容对不对
                 hit_ok += 1
+            else:
+                failures.append(
+                    {"q": c["q"], "type": "未命中", "gold": gold, "ans": ans[:80]}
+                )
             if "[1]" in ans or "[2]" in ans:     # 有没有标引用
                 cit_ok += 1
         else:
@@ -85,6 +110,10 @@ def evaluate(th=None, token=None):
             rej_sources_sum += len(src)          # 记录拒答时塞了多少条伪证据
             if "没有相关信息" in ans or "联系人工客服" in ans:
                 rej_ok += 1
+            else:
+                failures.append(
+                    {"q": c["q"], "type": "该拒未拒", "sources": len(src), "ans": ans[:80]}
+                )
     return {
         "evidence_th": th if th is not None else "default(0.60)",
         "n": len(cases),
@@ -92,6 +121,7 @@ def evaluate(th=None, token=None):
         "citation_rate": round(cit_ok / hit_total, 3) if hit_total else 0,
         "reject_rate": round(rej_ok / rej_total, 3) if rej_total else 0,
         "reject_avg_sources": round(rej_sources_sum / rej_total, 2) if rej_total else 0,
+        "failures": failures,
     }
 
 
