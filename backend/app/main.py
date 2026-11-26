@@ -5,12 +5,15 @@ import logging
 from contextlib import asynccontextmanager
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from app import auth
 from app import config
+from app import db
 from app import rag
 
 # 日志：仅在根 logger 尚无 handler 时初始化，避免覆盖 uvicorn 的日志配置
@@ -33,13 +36,15 @@ class ChatRequest(BaseModel):
 async def lifespan(app: FastAPI):
     # 启动：创建上游 GLM 流式调用的共享 HTTP 客户端（连接池复用，避免每请求新建）
     app.state.glm_client = httpx.AsyncClient(timeout=config.HTTP_TIMEOUT)
+    # 初始化 users 表与种子管理员账号：同步 DB 操作放工作线程，不阻塞事件循环
+    await asyncio.to_thread(auth.ensure_admin_seed)
     logger.info("应用启动，GLM 客户端已就绪")
     try:
         yield
     finally:
-        # 停止：释放 HTTP 客户端与 RAG 连接池
+        # 停止：释放 HTTP 客户端与共享 DB 连接池
         await app.state.glm_client.aclose()
-        rag.close()
+        db.close()
         logger.info("应用停止，资源已释放")
 
 
@@ -51,6 +56,35 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 挂载认证路由（/api/auth/login 等）
+app.include_router(auth.router)
+
+
+# ---- 统一异常处理：HTTP 错误与参数校验错误都包成 { code, message, data } ----
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"code": exc.status_code, "message": str(exc.detail), "data": None},
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc: RequestValidationError):
+    msg = "请求参数校验失败"
+    errors = exc.errors()
+    if errors:
+        first = errors[0]
+        # loc 形如 ("body", "username")，去掉外层定位符，只保留字段路径
+        loc = ".".join(
+            str(x) for x in first.get("loc", []) if x not in ("body", "query")
+        )
+        tip = first.get("msg", "")
+        msg = f"{loc} {tip}".strip() if loc else tip
+    return JSONResponse(
+        status_code=422, content={"code": 422, "message": msg, "data": None}
+    )
 
 
 def _sse(data: dict) -> str:

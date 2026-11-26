@@ -14,42 +14,18 @@ from collections import defaultdict
 
 import httpx
 import psycopg
-from psycopg_pool import ConnectionPool
 
 from app import config
+from app.db import close, get_pool
 
 logger = logging.getLogger("app.rag")
 
-# ---- 延迟初始化的连接池（线程安全，可跨 to_thread 的工作线程复用）----
-_pool: ConnectionPool | None = None
+# 连接池统一在 app.db 中维护（get_pool / close），RAG 与认证模块共用。
 
 
 def _vec_to_pg(vec) -> str:
     """把浮点向量转成 pgvector 接受的字符串 [0.1,0.2,...]。"""
     return "[" + ",".join(str(x) for x in vec) + "]"
-
-
-def _get_pool() -> ConnectionPool:
-    global _pool
-    if _pool is None:
-        _pool = ConnectionPool(
-            config.DB_DSN,
-            min_size=config.DB_POOL_MIN,
-            max_size=config.DB_POOL_MAX,
-        )
-        logger.info(
-            "DB 连接池已打开 min=%s max=%s", config.DB_POOL_MIN, config.DB_POOL_MAX
-        )
-    return _pool
-
-
-def close() -> None:
-    """关闭连接池，释放资源（应用停止 / 脚本结束时调用）。"""
-    global _pool
-    if _pool is not None:
-        _pool.close()
-        _pool = None
-        logger.info("DB 连接池已关闭")
 
 
 def embed_one(text):
@@ -72,7 +48,7 @@ def retrieve(question, top_k=5):
     """返回与 question 最相关的 top_k 条切片，每条含 content 和相似度。"""
     vec = embed_one(question)
     vec_str = _vec_to_pg(vec)
-    with _get_pool().connection() as conn:
+    with get_pool().connection() as conn:
         with conn.cursor() as cur:
             # <=> 是 pgvector 的余弦距离算子；1 - 距离 = 相似度（越接近 1 越相关）。
             cur.execute(
@@ -96,7 +72,7 @@ def retrieve_keyword(question, top_k=10):
         return {s[i:i + 2] for i in range(len(s) - 1)}
 
     qg = bigrams(question)
-    with _get_pool().connection() as conn:
+    with get_pool().connection() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT doc_id, content FROM chunks")
             rows = cur.fetchall()

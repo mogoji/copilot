@@ -1,12 +1,15 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import LoginView from '@/views/LoginView.vue'
 import DashboardView from '@/views/DashboardView.vue'
+import { AUTH_KEY, TOKEN_KEY } from '@/api/request'
 
-export const AUTH_KEY = 'self-operated-auth'
+// 重新导出，保持现有 `import { AUTH_KEY } from '@/router'` 的调用点无需改动
+export { AUTH_KEY }
 
 export function isAuthenticated() {
-  return (
-    localStorage.getItem(AUTH_KEY) === '1' || sessionStorage.getItem(AUTH_KEY) === '1'
+  // 以 JWT token 是否存在作为登录态判定的单一真源
+  return Boolean(
+    localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY),
   )
 }
 

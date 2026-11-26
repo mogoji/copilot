@@ -131,7 +131,7 @@ frontend/
 - **Tailwind v4**：主题 token 直接写在 `src/assets/main.css` 的 `@theme { ... }` 块中，**不需要** `tailwind.config.js`。
 - **路径别名**：`@` → `src/`（如 `import BrandLogo from '@/components/BrandLogo.vue'`）。
 - **字体**：Manrope（标题展示） + Noto Sans SC（中文正文）。
-- **鉴权**：登录成功后向 `localStorage` 写入 `self-operated-auth = '1'`；路由守卫在非 `/login` 路径下校验该值，未登录自动跳转登录页。
+- **鉴权**：登录成功后后端返回 JWT，前端将其存入 `localStorage`（勾选"记住我"）或 `sessionStorage`（键名 `self-operated-token`）；路由守卫以 token 是否存在判定登录态，未登录访问受保护路由自动跳转 `/login`；axios 请求拦截器自动携带 `Authorization: Bearer <token>`，响应拦截器收到 401 时清理登录态并跳回登录页。
 
 ## 开发小贴士
 
@@ -141,8 +141,9 @@ frontend/
 
 ## 与后端联调
 
-当前前端登录和仪表盘数据为演示用途的 mock 数据。如需对接后端 API：
+登录功能已对接后端真实接口；仪表盘数据目前仍为前端 mock，可按同样方式扩展。
 
-1. 启动后端服务（默认 `http://localhost:8000`），详见 [backend/README.md](../backend/README.md)。
-2. 在 `vite.config.ts` 中为 `/api` 路径添加 `server.proxy` 配置，或直接在组件内使用完整的后端地址。
-3. 将 `LoginView.vue` 的 `handleSubmit()` 和 `DashboardView.vue` 的 mock 数据替换为实际接口调用。
+- **接口基址**：axios 实例（`src/api/request.ts`）的 `baseURL` 默认 `http://localhost:8000/api`，可用环境变量 `VITE_API_BASE_URL` 覆盖。后端已配置 CORS 放行 `http://localhost:5173` 与 `http://127.0.0.1:5173`，开发环境可直接跨域调用，无需额外配 proxy。
+- **统一响应壳**：后端返回 `{ code, message, data }`；响应拦截器在 `code !== 0` 或 HTTP 非 2xx 时抛错并透传 `message`，业务侧用 `try/catch` 展示错误即可（见 `LoginView.vue` 的 `handleSubmit`）。
+- **登录接口**：`POST /api/auth/login`，body `{ "username", "password" }`，成功返回 `data.access_token` + `data.user`，封装在 `src/api/auth.ts`。
+- **启动后端**：默认 `http://localhost:8000`，详见 [backend/README.md](../backend/README.md)；演示账号 `admin / admin123` 由后端启动时自动 seed。

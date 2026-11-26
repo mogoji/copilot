@@ -55,11 +55,30 @@ DB_POOL_MIN = int(os.getenv("DB_POOL_MIN", "1"))
 DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "10"))
 
 # ---- CORS ----
+# 前端 dev server 可能用 localhost 或 127.0.0.1，默认两者都放行；
+# 生产环境通过 ALLOWED_ORIGINS 覆盖为真实前端域名。
 ALLOWED_ORIGINS = [
     o.strip()
-    for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
+    for o in os.getenv(
+        "ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+    ).split(",")
     if o.strip()
 ]
+
+# ---- JWT ----
+# 未配置时使用开发默认密钥并打印告警；生产环境务必通过 .env 覆盖。
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "")
+if not JWT_SECRET_KEY:
+    import sys
+
+    JWT_SECRET_KEY = "dev-only-insecure-secret-change-me-please"
+    print(
+        "WARNING: JWT_SECRET_KEY 未设置，正在使用不安全的开发默认密钥，"
+        "生产环境务必通过 .env 覆盖！",
+        file=sys.stderr,
+    )
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
 
 
 def clamp_evidence_th(value: float | None) -> float:

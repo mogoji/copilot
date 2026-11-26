@@ -39,3 +39,16 @@ CREATE INDEX chunks_embedding_hnsw
 
 -- 如需按 doc_id 快速查某文档所有切片（常规列表/清理场景），加 btree 索引：
 CREATE INDEX IF NOT EXISTS chunks_doc_id_idx ON chunks (doc_id);
+
+-- 5. 用户表：后台登录账号（密码存 bcrypt 哈希，不存明文）
+--    应用启动时 auth.ensure_admin_seed() 会自动 CREATE TABLE IF NOT EXISTS
+--    并写入演示管理员 admin / admin123；这里保留建表语句供全新部署参考。
+CREATE TABLE IF NOT EXISTS users (
+    id            SERIAL PRIMARY KEY,
+    username      VARCHAR(64) NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    nickname      VARCHAR(64) NOT NULL DEFAULT '',
+    role          VARCHAR(32) NOT NULL DEFAULT 'user',
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS users_username_idx ON users (username);

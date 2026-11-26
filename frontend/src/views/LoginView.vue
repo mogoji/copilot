@@ -18,6 +18,8 @@ import {
 } from 'lucide-vue-next'
 import BrandLogo from '@/components/BrandLogo.vue'
 import { AUTH_KEY } from '@/router'
+import { login } from '@/api/auth'
+import { TOKEN_KEY } from '@/api/request'
 
 const REMEMBER_KEY = 'self-operated-remembered-user'
 const route = useRoute()
@@ -65,27 +67,36 @@ async function handleSubmit() {
   if (!validate() || loading.value) return
 
   loading.value = true
-  // 演示登录：实际接入后端时，将此处替换为真实认证接口请求。
-  await new Promise((resolve) => window.setTimeout(resolve, 650))
+  try {
+    // 调用后端真实登录接口：POST /api/auth/login
+    const res = await login({
+      username: form.username.trim(),
+      password: form.password,
+    })
+    const token = res.data.access_token
 
-  if (form.username.trim() !== 'admin' || form.password !== 'admin123') {
-    errors.form = '用户名或密码不正确，请使用下方演示账号体验'
+    // "记住我"决定 token 持久化到 localStorage 还是仅当前会话的 sessionStorage
+    const storage = form.remember ? localStorage : sessionStorage
+    const otherStorage = form.remember ? sessionStorage : localStorage
+    // 切换存储侧时清理另一侧，避免旧登录态残留
+    otherStorage.removeItem(TOKEN_KEY)
+    otherStorage.removeItem(AUTH_KEY)
+    storage.setItem(TOKEN_KEY, token)
+    storage.setItem(AUTH_KEY, '1')
+
+    if (form.remember) {
+      localStorage.setItem(REMEMBER_KEY, form.username.trim())
+    } else {
+      localStorage.removeItem(REMEMBER_KEY)
+    }
+
+    await router.replace(redirectPath.value)
+  } catch (err) {
+    // 响应拦截器已把后端 message / 网络错误包装成 Error
+    errors.form = err instanceof Error ? err.message : '登录失败，请稍后重试'
+  } finally {
     loading.value = false
-    return
   }
-
-  const storage = form.remember ? localStorage : sessionStorage
-  const otherStorage = form.remember ? sessionStorage : localStorage
-  otherStorage.removeItem(AUTH_KEY)
-  storage.setItem(AUTH_KEY, '1')
-
-  if (form.remember) {
-    localStorage.setItem(REMEMBER_KEY, form.username.trim())
-  } else {
-    localStorage.removeItem(REMEMBER_KEY)
-  }
-
-  await router.replace(redirectPath.value)
 }
 </script>
 

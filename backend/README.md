@@ -99,6 +99,25 @@ curl -N -X POST http://localhost:8000/chat/stream \
 # 返回：data: {...} 事件流（sources → token → token → ... → [DONE]）
 ```
 
+## 用户认证（登录接口）
+
+`POST /api/auth/login`，基于 JWT 的无状态登录。
+
+- **请求**：JSON `{ "username": "admin", "password": "admin123" }`
+- **成功（200）**：`{ "code": 0, "message": "success", "data": { "access_token": "<jwt>", "token_type": "bearer", "user": {...} } }`
+- **失败（401）**：`{ "code": 401, "message": "用户名或密码错误", "data": null }`（账号不存在与密码错误提示相同，避免用户名枚举）
+- **缺参（422）**：Pydantic 校验，返回字段级提示，如 `password Field required`
+- 密码用 bcrypt 哈希存库（`users` 表），JWT 用 HS256 签发，密钥与有效期见 `.env`（`JWT_SECRET_KEY` / `ACCESS_TOKEN_EXPIRE_MINUTES`）。
+- 应用启动时 `auth.ensure_admin_seed()` 自动建表并写入演示账号 `admin / admin123`（幂等）。
+- CORS 默认放行 `http://localhost:5173` 与 `http://127.0.0.1:5173`，可通过 `ALLOWED_ORIGINS` 覆盖。
+
+```bash
+# 登录示例
+curl -s -X POST http://localhost:8000/api/auth/login \
+     -H "Content-Type: application/json" \
+     -d '{"username":"admin","password":"admin123"}'
+```
+
 ## 运行评测
 
 ### 检索层（推荐先跑，快且省钱）

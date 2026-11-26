@@ -43,6 +43,7 @@ import {
 } from 'lucide-vue-next'
 import BrandLogo from '@/components/BrandLogo.vue'
 import { AUTH_KEY } from '@/router'
+import { TOKEN_KEY } from '@/api/request'
 
 type MenuItem = { label: string; icon: Component; badge?: string }
 type MenuSection = { title: string; items: MenuItem[] }
@@ -315,6 +316,8 @@ function exportReport() {
 }
 
 function logout() {
+  localStorage.removeItem(TOKEN_KEY)
+  sessionStorage.removeItem(TOKEN_KEY)
   localStorage.removeItem(AUTH_KEY)
   sessionStorage.removeItem(AUTH_KEY)
   userMenuOpen.value = false
