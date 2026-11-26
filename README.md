@@ -75,12 +75,12 @@ data: [DONE]
 aftersales-copilot/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py            # FastAPI 入口：/health、/chat/stream（需登录）
+│   │   ├── main.py            # FastAPI 入口：/health（探库）、/health/live、/chat/stream（需登录）
+│   │   ├── db.py              # 共享连接池 + 探库 probe()（取连接时校验连接可用）
 │   │   ├── deps.py            # 鉴权依赖：解析 Bearer Token → 401/用户 payload
 │   │   ├── auth.py            # 登录接口 + users 表幂等初始化
 │   │   ├── security.py        # bcrypt 哈希 + JWT 签发/校验
 │   │   ├── config.py          # 集中配置（fail-fast 校验 + 阈值 clamp）
-│   │   ├── db.py              # psycopg 连接池（懒初始化，跨模块复用）
 │   │   ├── schemas.py         # Pydantic 模型 + 统一响应壳
 │   │   ├── rag.py             # 向量检索（+ 未启用的混合检索）
 │   │   ├── ingest.py          # 灌库脚本：切片 → embedding → 入库
@@ -159,8 +159,9 @@ pnpm dev        # http://localhost:5173
 命令行验证：
 
 ```bash
-# 健康检查（不需要登录）
+# 健康检查（不需要登录；探库失败会返回 503）
 curl http://localhost:8000/health
+curl http://localhost:8000/health/live
 
 # 未带 token → 401
 curl -i -X POST http://localhost:8000/chat/stream \
@@ -212,9 +213,27 @@ curl -N -X POST http://localhost:8000/chat/stream \
 
 失败语义：`401` 未登录/令牌过期（响应头带 `WWW-Authenticate: Bearer`）、`422` 参数非法、流内 `{"error": ...}` 表示上游异常。
 
-### `GET /health`
+### `GET /health` 与 `GET /health/live`
 
-返回 `{"ok": true}`。注意：**不探测数据库**，仅表示进程存活。
+两个探针语义不同，别混用：
+
+| 端点 | 探什么 | 用途 |
+|---|---|---|
+| `/health/live` | 什么都不探，只证明进程能响应 | livenessProbe：进程卡死才重启 |
+| `/health` | 真的连库执行 `SELECT 1`，并确认 `chunks` 表存在 | readinessProbe：库不可用就摘流量 |
+
+`/health` 的返回：
+
+```json
+{"ok": true, "db": "up", "has_chunks": true}
+```
+
+失败时返回 **503**（不是 200 + ok:false，编排和负载均衡只看状态码）：
+
+- `{"ok": false, "db": "down", "error": "PoolTimeout"}` —— 连不上库；取连接超时被限制在 2s，探针不会挂 30s
+- `{"ok": false, "db": "up", "has_chunks": false}` —— 库通但没建表/没灌库，检索必然 500
+
+`/health` 探库而不是只回一个写死的 `{"ok": true}`，是因为后者在数据库挂掉时仍然报健康——探针等于没有。实测：停掉 DB 容器后 `/health` 2.0s 返 503、`/health/live` 仍 2ms 返 200；DB 重启后 1s 内 `/health` 自动转绿（连接池的 `check` 会丢弃坏连接并重连）。
 
 ## 效果评测
 

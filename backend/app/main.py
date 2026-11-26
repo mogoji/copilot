@@ -114,8 +114,48 @@ def _resolve_threshold(client_th: float | None) -> float:
     return clamped
 
 
-@app.get("/health")
+@app.get("/health", summary="健康检查（含数据库就绪）")
 def health():
+    """健康检查：真正对库执行 SELECT 1，而不是只回一个写死的 ok。
+
+    - 200 {"ok": true, "db": "up", "has_chunks": true}   服务与依赖都正常
+    - 503 {"ok": false, "db": "down", ...}               连不上库（编排应摘流量）
+    - 503 {"ok": false, "db": "up", "has_chunks": false} 库通但没建表/没灌库
+
+    只回 {"ok": true} 的旧实现会让 DB 挂了也报健康，探针形同虚设；
+    这里用 HTTP 状态码表达结果，K8s / compose / 负载均衡都能直接判断。
+    """
+    try:
+        info = db.probe()
+    except Exception as exc:
+        # 细节只进日志：异常文本可能带 DSN 里的主机名/用户名，不返回给调用方
+        logger.exception("健康检查探库失败")
+        return JSONResponse(
+            status_code=503,
+            content={"ok": False, "db": "down", "error": type(exc).__name__},
+        )
+
+    if not info["has_chunks"]:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "ok": False,
+                "db": "up",
+                "has_chunks": False,
+                "error": "chunks 表不存在，请先执行 schema.sql 并完成灌库",
+            },
+        )
+
+    return {"ok": True, "db": "up", "has_chunks": True}
+
+
+@app.get("/health/live", summary="存活检查（不探依赖）")
+def health_live():
+    """存活检查：只证明进程还能响应请求，完全不碰数据库和上游模型。
+
+    与 /health 分开的原因：数据库短暂抖动时不应该让编排重启进程
+    （重启也修不好库），只该摘掉流量；只有进程真的卡死才需要重启。
+    """
     return {"ok": True}
 
 

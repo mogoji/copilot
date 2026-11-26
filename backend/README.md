@@ -17,7 +17,11 @@
 ```
 backend/
 ├── app/
-│   ├── main.py            # FastAPI 入口（/health、/chat/stream SSE）
+│   ├── main.py            # FastAPI 入口（/health 探库、/health/live、/chat/stream SSE）
+│   ├── db.py              # 共享连接池（取连接校验）+ probe() 探库
+│   ├── deps.py            # 鉴权依赖：Bearer Token → 401 / 用户 payload
+│   ├── auth.py            # 登录接口 + users 表幂等初始化
+│   ├── security.py        # bcrypt + JWT 签发/校验
 │   ├── rag.py             # RAG 核心：向量化 + pgvector 检索 + 混合检索（待启用）
 │   ├── ingest.py          # 灌库脚本（切片 + embedding + 入库，可重复执行）
 │   ├── eval_retrieval.py  # 检索层评测（只测 retrieve，快且省钱）
@@ -89,13 +93,20 @@ uv run uvicorn app.main:app --port 8000
 ### 6. 测试
 
 ```bash
-# 健康检查
-curl http://localhost:8000/health        # {"ok": true}
+# 健康检查：/health 会真的连库（失败 503），/health/live 只探进程存活
+curl http://localhost:8000/health        # {"ok":true,"db":"up","has_chunks":true}
+curl http://localhost:8000/health/live   # {"ok":true}
 
-# 流式对话（SSE，客户端可传 evidence_th）
+# 流式对话（SSE，需登录；客户端可传 evidence_th）
+TOKEN=$(curl -s -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"admin123"}' \
+  | python -c "import sys,json;print(json.load(sys.stdin)['data']['access_token'])")
+
 curl -N -X POST http://localhost:8000/chat/stream \
      -H "Content-Type: application/json" \
-     -d '{"q": "退款多久到账？"}'
+     -H "Authorization: Bearer $TOKEN" \
+     -d '{"q": "how long does refund take"}'
 # 返回：data: {...} 事件流（sources → token → token → ... → [DONE]）
 ```
 
