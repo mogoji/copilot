@@ -42,6 +42,7 @@ import {
   Warehouse,
 } from 'lucide-vue-next'
 import BrandLogo from '@/components/BrandLogo.vue'
+import CustomerServiceWidget from '@/components/CustomerServiceWidget.vue'
 import { AUTH_KEY } from '@/router'
 import { TOKEN_KEY } from '@/api/request'
 
@@ -575,7 +576,8 @@ onBeforeUnmount(() => {
             <h1 class="mt-2 text-[26px] font-semibold tracking-tight text-ink-950">{{ greeting }}，管理员</h1>
             <p class="mt-1.5 text-sm text-slate-500">这是您今天的经营概况，所有核心业务运转正常。</p>
           </div>
-          <div class="flex shrink-0 items-center gap-2.5">
+          <!-- 右侧预留 72px，避免与悬浮的智能客服入口重叠 -->
+          <div class="flex shrink-0 items-center gap-2.5 sm:pr-[72px]">
             <button type="button" class="secondary-button" @click="exportReport">
               <Download class="size-4" /> 导出报表
             </button>
@@ -850,6 +852,9 @@ onBeforeUnmount(() => {
         </footer>
       </main>
     </div>
+
+    <!-- 智能客服：右上角悬浮入口 + 对话弹窗 -->
+    <CustomerServiceWidget />
 
     <Transition name="toast">
       <div v-if="toast" class="fixed bottom-6 left-1/2 z-[70] flex max-w-[calc(100vw-32px)] -translate-x-1/2 items-center gap-2.5 rounded-xl bg-ink-950 px-4 py-3 text-xs text-white shadow-2xl shadow-ink-950/20" role="status">

@@ -146,4 +146,5 @@ frontend/
 - **接口基址**：axios 实例（`src/api/request.ts`）的 `baseURL` 默认 `http://localhost:8000/api`，可用环境变量 `VITE_API_BASE_URL` 覆盖。后端已配置 CORS 放行 `http://localhost:5173` 与 `http://127.0.0.1:5173`，开发环境可直接跨域调用，无需额外配 proxy。
 - **统一响应壳**：后端返回 `{ code, message, data }`；响应拦截器在 `code !== 0` 或 HTTP 非 2xx 时抛错并透传 `message`，业务侧用 `try/catch` 展示错误即可（见 `LoginView.vue` 的 `handleSubmit`）。
 - **登录接口**：`POST /api/auth/login`，body `{ "username", "password" }`，成功返回 `data.access_token` + `data.user`，封装在 `src/api/auth.ts`。
+- **智能客服**：仪表盘右上角悬浮机器人入口（`src/components/CustomerServiceWidget.vue`），点击弹出对话窗口，直接调用后端 `POST /chat/stream` 的 SSE 流式接口，解析 `sources` / `token` / `error` 事件；地址可用 `VITE_CHAT_URL` 覆盖（默认 `http://localhost:8000/chat/stream`）。
 - **启动后端**：默认 `http://localhost:8000`，详见 [backend/README.md](../backend/README.md)；演示账号 `admin / admin123` 由后端启动时自动 seed。
