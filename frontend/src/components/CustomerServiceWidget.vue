@@ -4,7 +4,8 @@
  *
  * - 页面右上角悬浮机器人图标，点击弹出对话窗口；
  * - 对接后端 RAG 流式接口 POST /chat/stream（SSE），解析 sources / token / error 事件；
- * - 支持 Enter 发送、Shift+Enter 换行、生成中可中断、引用资料来源展示。
+ * - 支持 Enter 发送、Shift+Enter 换行、生成中可中断、引用资料来源展示；
+ * - 输入法组合输入（拼音选词）期间的 Enter 只用于上屏，不会误触发发送。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { CircleAlert, LoaderCircle, Send, Square, X } from 'lucide-vue-next'
@@ -229,6 +230,41 @@ function handleKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape' && open.value) closeDialog()
 }
 
+/* ---------------- 输入框回车与输入法（IME） ---------------- */
+
+// 中文输入法里 Enter 是「确认候选词」，与「发送」天然冲突：
+// 只在非组合态才发送，组合态的 Enter 一律交还输入法，否则会出现
+// 「拼音还没选完，消息已经带着半截问题发出去了」。
+let composing = false
+// 记录组合结束时刻：个别 Safari 版本在 compositionend 之后才派发那次确认键的
+// keydown，此时 event.isComposing 已经是 false，只能靠这个极短时间窗兜底。
+let compositionEndedAt = 0
+const COMPOSITION_GUARD_MS = 60
+
+function onCompositionStart() {
+  composing = true
+}
+
+function onCompositionEnd() {
+  composing = false
+  compositionEndedAt = Date.now()
+}
+
+function onInputKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Enter') return
+
+  // Shift+Enter 换行、回答生成中回车都不发送，也不拦截浏览器默认行为
+  if (event.shiftKey || loading.value) return
+
+  // 组合输入中（含 keyCode 229 这种输入法占位键）的 Enter 属于「选词上屏」
+  if (event.isComposing || event.keyCode === 229 || composing) return
+  if (Date.now() - compositionEndedAt < COMPOSITION_GUARD_MS) return
+
+  // 到这里才是真正的「发送」：阻止默认换行，再触发发送
+  event.preventDefault()
+  void send()
+}
+
 onMounted(() => window.addEventListener('keydown', handleKeydown))
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleKeydown)
@@ -382,9 +418,11 @@ onBeforeUnmount(() => {
             ref="inputRef"
             v-model="input"
             rows="1"
-            placeholder="输入你的问题，Enter 发送"
+            placeholder="输入你的问题，Enter 发送、Shift+Enter 换行"
             class="max-h-24 min-h-[42px] flex-1 resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs leading-5 text-ink-800 outline-none transition placeholder:text-slate-400 focus:border-brand-400 focus:bg-white focus:ring-4 focus:ring-brand-500/10"
-            @keydown.enter.exact.prevent="send()"
+            @keydown="onInputKeydown"
+            @compositionstart="onCompositionStart"
+            @compositionend="onCompositionEnd"
           ></textarea>
 
           <button
