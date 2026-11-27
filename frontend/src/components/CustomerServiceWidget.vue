@@ -130,7 +130,11 @@ function closeDialog() {
 }
 
 /** 解析一条 SSE 消息块，把 token / sources / error 合并进回答消息 */
-function handleChunk(raw: string, reply: ChatMessage) {
+function handleChunk(
+  raw: string,
+  reply: ChatMessage,
+  sink: (token: string) => void,
+) {
   for (const line of raw.split('\n')) {
     if (!line.startsWith('data:')) continue
     const payload = line.slice(5).trim()
@@ -142,27 +146,42 @@ function handleChunk(raw: string, reply: ChatMessage) {
       continue
     }
     if (data.sources?.length) reply.sources = data.sources
-    if (data.token) reply.content += data.token
+    if (data.token) sink(data.token)
     if (data.error) reply.error = data.error
   }
   // 贴底由 MutationObserver 统一处理，此处不再手动触发
 }
 
-/** 发送问题并流式接收回答 */
+/**
+ * 回答展示模式（环境变量 VITE_CHAT_MODE 切换，默认 sse）：
+ *   sse  —— 后端每吐出一个 token 就渲染一次，呈现逐字打字机效果
+ *   once —— 先把整段答案收完，流结束时一次性渲染
+ */
+const CHAT_MODE: 'sse' | 'once' =
+  ((import.meta.env.VITE_CHAT_MODE as string | undefined) || 'sse')
+    .toLowerCase() === 'once'
+    ? 'once'
+    : 'sse'
+
+/** 发送问题并接收回答（sse 逐字渲染 / once 整段完成后渲染） */
 async function send(text?: string) {
   const question = (text ?? input.value).trim()
   if (!question || loading.value) return
 
   input.value = ''
   messages.value.push({ id: ++seq, role: 'user', content: question, sources: [] })
-  const reply: ChatMessage = {
+  // 关键：先 push，再从数组里取回元素，拿到的是 Vue 的响应式代理。
+  // 若像旧写法那样保留 push 传入的原始对象再修改它，Vue 感知不到字段变化，
+  // 界面会等 finally 里 loading 置 false 才整体刷新一次——也就是
+  // "答案组织完成后一次性展示"的根因。
+  messages.value.push({
     id: ++seq,
     role: 'assistant',
     content: '',
     sources: [],
     streaming: true,
-  }
-  messages.value.push(reply)
+  })
+  const reply = messages.value[messages.value.length - 1] as ChatMessage
   loading.value = true
   // 自动贴底交给 MutationObserver；此处仅重置开关（可能被用户向上滚动关掉）
   autoScrollEnabled = true
@@ -200,14 +219,23 @@ async function send(text?: string) {
     const reader = res.body.getReader()
     const decoder = new TextDecoder('utf-8')
     let buffer = ''
+    // sse 模式：token 直接追加到响应式消息，触发逐字渲染
+    // once 模式：token 先攒在本地，等流结束再一次性写回
+    let collected = ''
+    const sink = (token: string) => {
+      if (CHAT_MODE === 'sse') reply.content += token
+      else collected += token
+    }
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
       buffer += decoder.decode(value, { stream: true })
       const blocks = buffer.split('\n\n')
       buffer = blocks.pop() ?? ''
-      for (const block of blocks) handleChunk(block, reply)
+      for (const block of blocks) handleChunk(block, reply, sink)
     }
+    // once 模式：流结束后把累积的整段答案一次性写回消息
+    if (CHAT_MODE === 'once') reply.content = collected
   } catch (error) {
     // 用户主动中断不算错误
     if ((error as Error).name !== 'AbortError') {
@@ -225,6 +253,7 @@ async function send(text?: string) {
     void scrollToBottom()
   }
 }
+
 
 function handleKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape' && open.value) closeDialog()
