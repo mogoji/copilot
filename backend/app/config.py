@@ -71,6 +71,10 @@ DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "10"))
 KB_MAX_FILE_MB = int(os.getenv("KB_MAX_FILE_MB", "10"))
 # 分片长度（字符）与相邻分片重叠长度：按段落聚合，超长段落再按滑动窗口切
 KB_CHUNK_SIZE = int(os.getenv("KB_CHUNK_SIZE", "500"))
+# FAQ 类文档（一问一答、段落短）单独用更小的片：500 字会把 3~5 条问答揉进一片，
+# 具体事实的相似度被平均语义稀释（实测「系统维护时间」500 字片 0.594 排名第 6 落选，
+# 250~300 字片 0.66 左右排名第 1 命中）。长文/合同类仍走 KB_CHUNK_SIZE。
+KB_CHUNK_SIZE_FAQ = int(os.getenv("KB_CHUNK_SIZE_FAQ", "250"))
 KB_CHUNK_OVERLAP = int(os.getenv("KB_CHUNK_OVERLAP", "50"))
 # 上传文件落盘目录：默认 backend/storage/kb（已 gitignore）
 KB_STORAGE_DIR = os.getenv(

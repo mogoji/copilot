@@ -258,13 +258,20 @@ def parse_file(ext: str, data: bytes) -> str:
 # 分片
 # --------------------------------------------------------------------------
 def chunk_text(text: str, size: int, overlap: int) -> list[str]:
-    """按语义段落聚合分片；超长段落用滑动窗口切，保留 overlap 字符上下文。"""
+    """按语义段落聚合分片；标题开新片，超长段落用滑动窗口切并保留 overlap 上下文。"""
     text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
     paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
     chunks: list[str] = []
     buffer = ""
 
     for paragraph in paragraphs:
+        if _is_heading(paragraph):
+            # 标题必须开新片：否则「服务时效承诺」这类小标题会被并进上一条问答，
+            # 标题下的时效/维护信息跟着上一条的语义跑，问维护时间反而检索不到
+            if buffer:
+                chunks.append(buffer)
+            buffer = paragraph
+            continue
         if len(paragraph) > size:
             if buffer:
                 chunks.append(buffer)
@@ -284,6 +291,46 @@ def chunk_text(text: str, size: int, overlap: int) -> list[str]:
         chunks.append(buffer)
     # 过短碎片（如单个标题）不足以独立检索，直接丢弃
     return [c.strip() for c in chunks if len(c.strip()) >= 10]
+
+
+_HEADING_PREFIX = re.compile(r"^\s*(?:[一二三四五六七八九十]+[、.]|\d+[.、]\s|第[一二三四五六七八九十]+[章节]|#+\s)")
+
+
+def _is_heading(paragraph: str) -> bool:
+    """短、且不以句末标点收尾的段落视为标题（如「五、发票」「服务时效承诺」）。
+
+    问句标题（「1. 如何申请退款？」）以问号收尾，不算标题——它必须和自己的答案同片。
+    """
+    if len(paragraph) > 30:
+        return False
+    if paragraph.endswith(("。", "！", "？", "!", "?", "；", ";")):
+        return False
+    return bool(_HEADING_PREFIX.match(paragraph)) or len(paragraph) <= 16
+
+
+_FAQ_QUESTION_HEAD = re.compile(r"^\s*(问|Q|q)\s*[：:.、]")
+
+
+def looks_like_faq(text: str) -> bool:
+    """粗判文档是否「一问一答」型，用于选择更小的分片长度。
+
+    判据故意宽松且可解释：段落以「问：/Q:」开头，或整段不超过 40 字且以问号结尾。
+    至少 3 条，且占全部段落 ≥20%；或问句本身 ≥10 条（FAQ 手册后面常附大表格，
+    段落基数被撑大，单看占比会漏判）。
+    理由：FAQ 一条问答只有一两句话，按 500 字聚合会把 3~5 条揉进一片，
+    embedding 变成「平均语义」，具体事实反而被稀释而检索不到。
+    """
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    if len(paragraphs) < 4:
+        return False
+    questions = sum(
+        1
+        for p in paragraphs
+        if _FAQ_QUESTION_HEAD.match(p) or (len(p) <= 40 and p.endswith(("？", "?")))
+    )
+    if questions < 3:
+        return False
+    return questions >= 10 or questions / len(paragraphs) >= 0.20
 
 
 # --------------------------------------------------------------------------
@@ -377,9 +424,16 @@ def _run_job(job_id: int) -> None:
             raise RuntimeError("未能从文件中解析出任何文本内容")
 
         _update_job(job_id, stage="chunking", progress=10)
-        chunks = chunk_text(text, config.KB_CHUNK_SIZE, config.KB_CHUNK_OVERLAP)
+        # FAQ 类文档用更小的片：一条问答尽量独占一片，避免事实被同片其他主题稀释
+        faq_mode = looks_like_faq(text)
+        chunk_size = config.KB_CHUNK_SIZE_FAQ if faq_mode else config.KB_CHUNK_SIZE
+        chunks = chunk_text(text, chunk_size, config.KB_CHUNK_OVERLAP)
         if not chunks:
             raise RuntimeError("分片后没有有效内容，请检查文件正文")
+        logger.info(
+            "分片完成 job=%s 模式=%s 片长=%s 片数=%s",
+            job_id, "FAQ" if faq_mode else "长文", chunk_size, len(chunks),
+        )
         _update_job(job_id, total_chunks=len(chunks), progress=15)
 
         _update_job(job_id, stage="embedding")
@@ -412,7 +466,8 @@ def _run_job(job_id: int) -> None:
             operator,
             "import_finish",
             filename,
-            f"成功 {success} 条，失败 {failed} 条",
+            f"成功 {success} 条，失败 {failed} 条"
+            f"（{'FAQ' if faq_mode else '长文'}分片 {chunk_size} 字）",
         )
     except Exception as exc:
         logger.exception("知识库导入失败 job=%s file=%s", job_id, filename)
