@@ -2,7 +2,7 @@
 import { http } from './request'
 import type { ApiResult } from './request'
 
-export type KbJobStatus = 'pending' | 'processing' | 'success' | 'failed'
+export type KbJobStatus = 'pending' | 'processing' | 'success' | 'failed' | 'duplicate'
 
 export interface KbJob {
   id: number
@@ -20,6 +20,10 @@ export interface KbJob {
   created_at: string
   started_at: string | null
   finished_at: string | null
+  /** 文件内容的 SHA-256，用于判重 */
+  content_hash: string
+  /** 本次上传被判为重复时，指向已入库的原任务 id */
+  duplicate_of: number | null
 }
 
 export interface KbJobPage {
@@ -50,13 +54,16 @@ export const KB_ACCEPT = '.pdf,.docx,.xlsx,.md'
 export const KB_MAX_MB = 10
 export const KB_EXT_LABEL = 'PDF / Word(.docx) / Excel(.xlsx) / Markdown(.md)'
 
-/** 上传并一键入库：后端立即返回任务，后续通过 getJob 轮询进度 */
+/** 上传并一键入库：后端立即返回任务，后续通过 getJob 轮询进度。
+ * `force=true` 时即使内容与已入库文件一致也重新导入（覆盖旧版本）。 */
 export function importKnowledgeFile(
   file: File,
   onUploadProgress?: (percent: number) => void,
+  force = false,
 ) {
   const form = new FormData()
   form.append('file', file)
+  form.append('force', force ? 'true' : 'false')
   return http.post<ApiResult<KbJob>>('/kb/import', form, {
     timeout: 120000,
     onUploadProgress: (event) => {

@@ -7,8 +7,11 @@
 - 写入仍走现有 documents / chunks 表，因此 rag.retrieve 无需任何改动，
   导入完成后即可被智能客服检索命中（替代静态 faq.json 的入库方式）；
 - 每个分片独立事务写入：个别分片失败不影响其他分片，便于统计成功/失败条数；
-- 关键操作（导入、重试、完成/失败）写入 kb_audit_logs，便于事后追溯。
+- 按文件去重：内容 SHA-256 相同的文件直接跳过（不重复调用 embedding），
+  同名文件视为新版本——先删旧分片再写新分片，库里同一份资料只有一份；
+- 关键操作（导入、跳过重复、覆盖旧版本、重试、完成/失败）写入 kb_audit_logs。
 """
+import hashlib
 import io
 import logging
 import re
@@ -17,7 +20,7 @@ import uuid
 from pathlib import Path
 
 import httpx
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from app import config
 from app.db import get_pool
@@ -61,12 +64,16 @@ CREATE TABLE IF NOT EXISTS kb_audit_logs (
     detail     TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- 去重所需的字段：老库已存在该表，CREATE TABLE IF NOT EXISTS 不会补列，必须显式 ADD
+ALTER TABLE kb_import_jobs ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64) NOT NULL DEFAULT '';
+ALTER TABLE kb_import_jobs ADD COLUMN IF NOT EXISTS duplicate_of INTEGER;
+CREATE INDEX IF NOT EXISTS idx_kb_jobs_content_hash ON kb_import_jobs (content_hash);
 """
 
 _JOB_COLUMNS = (
     "id, filename, file_size, ext, status, stage, progress, "
     "total_chunks, success_chunks, failed_chunks, error_detail, operator, "
-    "created_at, started_at, finished_at"
+    "created_at, started_at, finished_at, content_hash, duplicate_of"
 )
 
 
@@ -104,9 +111,11 @@ def _row_to_job(row, with_path: bool = False) -> dict:
         "created_at": _iso(row[12]),
         "started_at": _iso(row[13]),
         "finished_at": _iso(row[14]),
+        "content_hash": row[15] or "",
+        "duplicate_of": row[16],
     }
     if with_path:
-        job["stored_path"] = row[15]
+        job["stored_path"] = row[17]
     return job
 
 
@@ -121,18 +130,76 @@ def get_job(job_id: int, with_path: bool = False) -> dict | None:
     return _row_to_job(row, with_path=with_path) if row else None
 
 
-def _create_job(filename: str, stored_path: str, size: int, ext: str, operator: str) -> int:
+def _create_job(
+    filename: str,
+    stored_path: str,
+    size: int,
+    ext: str,
+    operator: str,
+    content_hash: str = "",
+) -> int:
     with get_pool().connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO kb_import_jobs "
-                "(filename, stored_path, file_size, ext, operator) "
-                "VALUES (%s, %s, %s, %s, %s) RETURNING id",
-                (filename, stored_path, size, ext, operator),
+                "(filename, stored_path, file_size, ext, operator, content_hash) "
+                "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+                (filename, stored_path, size, ext, operator, content_hash),
             )
             job_id = cur.fetchone()[0]
         conn.commit()
     return job_id
+
+
+def _find_success_by_hash(content_hash: str) -> dict | None:
+    """查找「内容一致且这份内容就是该文件名当前版本」的已成功任务（用于判重）。
+
+    两条约束缺一不可：
+    1. 只认**该文件名最新一次成功**的记录。否则「v1 传过、v2 覆盖了、又传 v1」
+       会被判成重复而跳过，可库里装的是 v2，等于用户传了个寂寞；
+    2. 该 source 在库里确实还有分片。任务记录成功但分片被手工删掉时若仍跳过，
+       用户会发现「传了但检索不到」，比重复入库更难受。
+    """
+    if not content_hash:
+        return None
+    with get_pool().connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT {_JOB_COLUMNS} FROM kb_import_jobs j "
+                "WHERE j.content_hash = %s AND j.status = 'success' "
+                "AND j.id = (SELECT max(id) FROM kb_import_jobs "
+                "            WHERE status = 'success' AND filename = j.filename) "
+                "ORDER BY j.id DESC LIMIT 1",
+                (content_hash,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            job = _row_to_job(row)
+            cur.execute(
+                "SELECT count(*) FROM chunks c JOIN documents d ON d.id = c.doc_id "
+                "WHERE d.source = %s",
+                (_source_of(job["filename"]),),
+            )
+            if cur.fetchone()[0] == 0:
+                logger.warning(
+                    "任务 #%s 记录成功但库里已无分片，按首次导入处理", job["id"]
+                )
+                return None
+    return job
+
+
+def _drop_source(source: str) -> int:
+    """删除某份文件在库里的全部分片（chunks 随外键级联），返回删除的 documents 行数。
+
+    documents 是「一片一行」，所以行数就是旧分片数。
+    """
+    with get_pool().connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM documents WHERE source = %s", (source,))
+            removed = cur.rowcount
+        conn.commit()
+    return removed
 
 
 def _update_job(job_id: int, **fields) -> None:
@@ -330,8 +397,12 @@ def looks_like_faq(text: str) -> bool:
     """粗判文档是否「一问一答」型，用于选择更小的分片长度。
 
     判据故意宽松且可解释：段落以「问：/Q:」开头，或整段不超过 40 字且以问号结尾。
-    至少 3 条，且占全部段落 ≥20%；或问句本身 ≥10 条（FAQ 手册后面常附大表格，
-    段落基数被撑大，单看占比会漏判）。
+    至少 2 条，且占全部段落 ≥20%；或问句本身 ≥10 条（FAQ 手册后面常附大表格，
+    段落基数被撑大，单看占比会漏判）。下限取 2 而不是 3：两份问答的短文档
+    命中率 2/6 已明显是 FAQ，卡在 3 会退回普通聚合、两条问答被揉成一片。
+    宁可把非 FAQ 误判成 FAQ：`_chunk_qa` 对非问答区域仍走按段聚合，
+    误判最多让几个段落多带一行标题前缀；反过来误判成非 FAQ 会把多条问答揉进
+    一片、把事实稀释掉，这个损失不可逆。
     理由：FAQ 一条问答只有一两句话，按 500 字聚合会把 3~5 条揉进一片，
     embedding 变成「平均语义」，具体事实反而被稀释而检索不到。
     """
@@ -339,7 +410,7 @@ def looks_like_faq(text: str) -> bool:
     if len(paragraphs) < 4:
         return False
     questions = sum(1 for p in paragraphs if _is_question(p))
-    if questions < 3:
+    if questions < 2:
         return False
     return questions >= 10 or questions / len(paragraphs) >= 0.20
 
@@ -473,12 +544,17 @@ def embed_texts(texts: list[str], on_batch_done=None) -> list[list[float]]:
     return vectors
 
 
+def _source_of(filename: str) -> str:
+    """文件在 documents.source 里的标识；同名文件视为同一份资料（覆盖语义）。"""
+    return f"upload:{filename}"[:200]
+
+
 def _persist(job_id: int, filename: str, chunks: list[str], vectors: list[list[float]]):
     """逐片独立事务写入 documents / chunks，返回 (成功数, 失败数, 错误明细)。"""
     success = 0
     failed = 0
     errors: list[str] = []
-    source = f"upload:{filename}"[:200]
+    source = _source_of(filename)
 
     for index, (content, vector) in enumerate(zip(chunks, vectors)):
         try:
@@ -558,6 +634,12 @@ def _run_job(job_id: int) -> None:
         )
 
         _update_job(job_id, stage="writing", progress=82)
+        # 同名文件视为新版本：先清掉旧分片再写，避免新旧两版同时躺在库里
+        # 变成「同一件事两份证据」。放在向量化之后，embedding 失败时旧数据仍可用。
+        removed = _drop_source(_source_of(filename))
+        if removed:
+            logger.info("覆盖旧版本 job=%s file=%s 删除旧分片=%s", job_id, filename, removed)
+            _audit(operator, "import_replace", filename, f"覆盖旧版本，删除旧分片 {removed} 条")
         success, failed, errors = _persist(job_id, filename, chunks, vectors)
 
         status = "success" if success > 0 else "failed"
@@ -580,7 +662,8 @@ def _run_job(job_id: int) -> None:
             "import_finish",
             filename,
             f"成功 {success} 条，失败 {failed} 条"
-            f"（{'FAQ一问一片' if faq_mode else '长文'}分片 {chunk_size} 字）",
+            f"（{'FAQ一问一片' if faq_mode else '长文'}分片 {chunk_size} 字）"
+            + (f"，覆盖旧分片 {removed} 条" if removed else ""),
         )
     except Exception as exc:
         logger.exception("知识库导入失败 job=%s file=%s", job_id, filename)
@@ -626,7 +709,9 @@ def _start_job_thread(job_id: int) -> None:
 # --------------------------------------------------------------------------
 @router.post("/import", response_model=ApiResponse[dict], summary="上传并一键入库")
 async def import_knowledge(
-    file: UploadFile = File(...), user: dict = Depends(require_admin)
+    file: UploadFile = File(...),
+    force: bool = Form(False),
+    user: dict = Depends(require_admin),
 ) -> ApiResponse[dict]:
     filename, ext = _validate_ext(file.filename or "")
     data = await file.read()
@@ -641,14 +726,47 @@ async def import_knowledge(
         )
     _sniff_content(ext, data)
 
+    operator = user.get("sub", "unknown")
+    digest = hashlib.sha256(data).hexdigest()
+
+    # 按文件去重：内容一致就不重复入库（省一次 embedding，也避免同一事实两份证据）
+    existing = _find_success_by_hash(digest)
+    if existing and not force:
+        job_id = _create_job(filename, "", len(data), ext, operator, digest)
+        _update_job(
+            job_id,
+            status="duplicate",
+            stage="skipped",
+            progress=100,
+            total_chunks=existing["total_chunks"],
+            success_chunks=existing["success_chunks"],
+            duplicate_of=existing["id"],
+        )
+        _set_finished_now(job_id)
+        _audit(
+            operator,
+            "import_skip_duplicate",
+            filename,
+            f"内容与任务 #{existing['id']}（{existing['filename']}）一致，已跳过重复入库",
+        )
+        logger.info(
+            "跳过重复文件 file=%s hash=%s 原任务=#%s", filename, digest[:12], existing["id"]
+        )
+        return ApiResponse(data=get_job(job_id) or {})
+
     storage = Path(config.KB_STORAGE_DIR)
     storage.mkdir(parents=True, exist_ok=True)
     stored_path = storage / f"{uuid.uuid4().hex}.{ext}"
     stored_path.write_bytes(data)
 
-    operator = user.get("sub", "unknown")
-    job_id = _create_job(filename, str(stored_path), len(data), ext, operator)
-    _audit(operator, "import", filename, f"{ext.upper()} · {len(data)} 字节")
+    job_id = _create_job(filename, str(stored_path), len(data), ext, operator, digest)
+    _audit(
+        operator,
+        "import",
+        filename,
+        f"{ext.upper()} · {len(data)} 字节 · sha256:{digest[:12]}"
+        + ("（强制重导）" if force and existing else ""),
+    )
     _start_job_thread(job_id)
 
     job = get_job(job_id)

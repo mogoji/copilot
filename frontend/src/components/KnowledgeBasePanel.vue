@@ -39,6 +39,7 @@ import {
 const fileInput = ref<HTMLInputElement | null>(null)
 const selectedFile = ref<File | null>(null)
 const dragActive = ref(false)
+const forceImport = ref(false)
 const errorText = ref('')
 const running = ref(false)
 const currentJob = ref<KbJob | null>(null)
@@ -69,6 +70,7 @@ const stageText: Record<string, string> = {
   writing: '写入向量库',
   success: '已完成',
   failed: '处理失败',
+  skipped: '内容重复，已跳过',
 }
 
 const statusMeta: Record<KbJobStatus, { label: string; cls: string }> = {
@@ -76,12 +78,15 @@ const statusMeta: Record<KbJobStatus, { label: string; cls: string }> = {
   processing: { label: '处理中', cls: 'bg-amber-50 text-amber-600' },
   success: { label: '成功', cls: 'bg-brand-50 text-brand-700' },
   failed: { label: '失败', cls: 'bg-red-50 text-red-600' },
+  duplicate: { label: '重复跳过', cls: 'bg-sky-50 text-sky-600' },
 }
 
 const actionText: Record<string, string> = {
   import: '上传导入',
   import_finish: '导入完成',
   import_fail: '导入失败',
+  import_replace: '覆盖旧版本',
+  import_skip_duplicate: '跳过重复',
   retry: '重试任务',
 }
 
@@ -148,7 +153,8 @@ async function pollJob(id: number) {
       const res = await getJob(id)
       currentJob.value = res.data
       failures = 0
-      if (res.data.status === 'success' || res.data.status === 'failed') break
+      // duplicate 是终态（内容与已入库文件一致，直接跳过，不会有后续阶段）
+      if (['success', 'failed', 'duplicate'].includes(res.data.status)) break
     } catch (error) {
       failures += 1
       if (failures >= 3) {
@@ -165,12 +171,18 @@ async function startImport() {
   running.value = true
   uploadPercent.value = 0
   currentJob.value = null
+  const force = forceImport.value
   try {
-    const res = await importKnowledgeFile(selectedFile.value, (percent) => {
-      uploadPercent.value = percent
-    })
+    const res = await importKnowledgeFile(
+      selectedFile.value,
+      (percent) => {
+        uploadPercent.value = percent
+      },
+      force,
+    )
     currentJob.value = res.data
-    await pollJob(res.data.id)
+    // 判重命中时后端直接返回终态，不必再轮询
+    if (res.data.status !== 'duplicate') await pollJob(res.data.id)
   } catch (error) {
     errorText.value = (error as Error).message
   } finally {
@@ -351,6 +363,13 @@ onBeforeUnmount(() => {
           <UploadCloud v-else class="size-4" />
           {{ running ? '正在导入入库…' : '导入入库' }}
         </button>
+        <label class="mt-3 flex cursor-pointer items-start gap-2 text-[11px] leading-4 text-slate-500">
+          <input v-model="forceImport" type="checkbox" class="mt-0.5 size-3.5 accent-brand-600" />
+          <span>
+            内容未变也强制重导（覆盖同名旧分片）
+            <span class="text-slate-400">· 换了分片参数想重跑时勾选</span>
+          </span>
+        </label>
         <p class="mt-2 text-center text-[11px] text-slate-400">
           点击后自动完成 解析 → 分片 → 向量化 → 入库，请保持页面打开
         </p>
@@ -372,7 +391,13 @@ onBeforeUnmount(() => {
           <div class="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
             <div
               class="h-full rounded-full transition-all duration-500"
-              :class="currentJob.status === 'failed' ? 'bg-red-500' : 'bg-brand-500'"
+              :class="
+                currentJob.status === 'failed'
+                  ? 'bg-red-500'
+                  : currentJob.status === 'duplicate'
+                    ? 'bg-sky-400'
+                    : 'bg-brand-500'
+              "
               :style="{ width: `${currentJob.progress}%` }"
             />
           </div>
@@ -397,6 +422,16 @@ onBeforeUnmount(() => {
             class="mt-4 flex items-center gap-2 rounded-xl bg-brand-50 px-3 py-2.5 text-xs text-brand-700"
           >
             <CheckCircle2 class="size-4 shrink-0" /> 入库完成，知识内容已可被智能客服检索
+          </div>
+          <div
+            v-else-if="currentJob.status === 'duplicate'"
+            class="mt-4 flex items-start gap-2 rounded-xl bg-sky-50 px-3 py-2.5 text-xs leading-5 text-sky-700"
+          >
+            <ShieldCheck class="mt-0.5 size-4 shrink-0" />
+            <span>
+              该文件内容与已入库的任务 #{{ currentJob.duplicate_of }} 完全一致，已跳过重复入库（库里仍只有一份）。
+              如确实需要重跑，请勾选「强制重导」后再上传。
+            </span>
           </div>
           <div
             v-else-if="currentJob.status === 'failed'"
@@ -573,6 +608,15 @@ onBeforeUnmount(() => {
                 <dd class="mt-1 font-medium text-ink-800">
                   {{ formatTime(detailJob.created_at) }} → {{ formatTime(detailJob.finished_at) }}
                 </dd>
+              </div>
+              <div class="col-span-2 rounded-xl bg-slate-50 px-3 py-2">
+                <dt class="text-[11px] text-slate-400">内容指纹（SHA-256，判重依据）</dt>
+                <dd class="mt-1 break-all font-mono text-[11px] text-ink-700">
+                  {{ detailJob.content_hash || '—（历史任务未记录）' }}
+                </dd>
+                <p v-if="detailJob.duplicate_of" class="mt-1 text-[11px] text-sky-600">
+                  该次上传与任务 #{{ detailJob.duplicate_of }} 内容一致，已跳过
+                </p>
               </div>
             </dl>
             <div v-if="detailJob.error_detail" class="mt-3">
