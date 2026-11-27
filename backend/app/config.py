@@ -76,6 +76,10 @@ KB_CHUNK_SIZE = int(os.getenv("KB_CHUNK_SIZE", "500"))
 # 250~300 字片 0.66 左右排名第 1 命中）。长文/合同类仍走 KB_CHUNK_SIZE。
 KB_CHUNK_SIZE_FAQ = int(os.getenv("KB_CHUNK_SIZE_FAQ", "250"))
 KB_CHUNK_OVERLAP = int(os.getenv("KB_CHUNK_OVERLAP", "50"))
+# FAQ 类文档是否严格「一问一片」：识别出「问句 + 答案」结构时，一条问答独立成片，
+# 不再与相邻问答合并。250 字只是「不超上限」，仍会把两三条短问答并进一片；
+# 严格模式按语义边界切，片长由问答本身决定（超长答案才按窗口切）。
+KB_FAQ_ONE_PER_CHUNK = os.getenv("KB_FAQ_ONE_PER_CHUNK", "1") not in ("0", "false", "False")
 # 上传文件落盘目录：默认 backend/storage/kb（已 gitignore）
 KB_STORAGE_DIR = os.getenv(
     "KB_STORAGE_DIR", str(Path(__file__).resolve().parent.parent / "storage" / "kb")
