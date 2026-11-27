@@ -18,10 +18,11 @@ LOGIN_URL = f"{BASE}/api/auth/login"
 USERNAME = os.getenv("EVAL_USERNAME", "admin")
 PASSWORD = os.getenv("EVAL_PASSWORD", "admin123")
 
-# 【Day3 步骤6】阈值可从命令行传入，便于对比 0.35（基线）vs 0.60（优化）：
+# 【Day3 步骤6】阈值从命令行传入，便于对比 0.35（基线）vs 0.60（优化）：
 #   uv run python app/eval_e2e.py 0.35
 #   uv run python app/eval_e2e.py 0.60
-TH = float(sys.argv[1]) if len(sys.argv) > 1 else None
+# 注意：解析放在 __main__ 里，不在模块级——否则别的脚本 import 本模块时，
+# 它自己的命令行参数（比如输出文件路径）会被当成阈值解析而报错。
 
 
 def login() -> str:
@@ -126,4 +127,5 @@ def evaluate(th=None, token=None):
 
 
 if __name__ == "__main__":
-    print(json.dumps(evaluate(TH), ensure_ascii=False, indent=2))
+    threshold = float(sys.argv[1]) if len(sys.argv) > 1 else None
+    print(json.dumps(evaluate(threshold), ensure_ascii=False, indent=2))

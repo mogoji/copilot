@@ -10,3 +10,6 @@ dist/
 # 开发日志与过程截图：仅本地留存，不纳入 Git 追踪
 logs.md
 .screenshots/
+
+# 评测原始输出（可复现，不入库）
+.eval_out/
