@@ -6,7 +6,6 @@ dist/
 .DS_Store
 *.pyc
 .pytest_cache/
-test.py
 
 # 开发日志与过程截图：仅本地留存，不纳入 Git 追踪
 logs.md
