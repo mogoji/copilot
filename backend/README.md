@@ -157,10 +157,42 @@ python -m app.eval_e2e 0.35       # 复现基线对比
 | `EMBEDDING_DIMENSIONS` | 1024 | 向量维度（需与模型 + schema.sql 保持一致） |
 | `GLM_MODEL` | glm-5.3-flash | 生成模型 |
 | `EVIDENCE_TH` | 0.60 | 服务端证据阈值（低于此相似度的检索结果不喂给模型）|
+| `ENABLE_RAG` | true | RAG 总开关：`false` 时跳过检索、直接让模型回答（对照实验用，不访问数据库）|
 | `EVIDENCE_TH_MIN` / `EVIDENCE_TH_MAX` | 0.40 / 0.85 | 客户端传入 evidence_th 会被 clamp 到这个范围 |
 | `HTTP_TIMEOUT` / `EMBED_TIMEOUT` | 60 / 30 | 上游调用超时秒数 |
 | `DB_POOL_MIN` / `DB_POOL_MAX` | 1 / 10 | 数据库连接池大小 |
 | `ALLOWED_ORIGINS` | http://localhost:5173 | CORS 白名单，逗号分隔 |
+
+## 知识库管理（仅 admin）
+
+把资料文件上传后自动完成 **解析 → 分片 → 向量化 → 写入 `documents` / `chunks`**，
+入库内容立即参与 RAG 检索（无需再跑 `ingest` 灌静态 JSON）。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/kb/import` | multipart 上传（字段名 `file`），立即返回任务，后台线程处理 |
+| GET | `/api/kb/jobs?page=&page_size=` | 导入历史（状态、时间、操作人、成功/失败条数） |
+| GET | `/api/kb/jobs/{id}` | 单任务进度，前端轮询 |
+| POST | `/api/kb/jobs/{id}/retry` | 仅失败任务可重试（复用已落盘的原始文件） |
+| GET | `/api/kb/audit-logs?limit=` | 审计日志（导入 / 完成 / 失败 / 重试） |
+| GET | `/api/kb/stats` | 已入库文档数与分片数 |
+
+- **权限**：全部接口挂 `Depends(require_admin)`，普通用户（`role != admin`）返回 403。
+- **校验**：扩展名白名单（pdf/docx/xlsx/md）+ 大小上限 + 魔数嗅探（防止改后缀的可执行文件）。
+- **分片**：先按空行切语义段落并聚合到 `KB_CHUNK_SIZE`；超长段落按滑动窗口切，保留 `KB_CHUNK_OVERLAP` 重叠。
+- **可靠性**：每个分片独立事务写入，单条失败只计入 `failed_chunks`，异常明细写入任务 `error_detail`。
+- **落盘目录**：`backend/storage/kb/`（已 gitignore），供失败重试复用原始文件。
+- **相关环境变量**：`KB_MAX_FILE_MB`（默认 10）、`KB_CHUNK_SIZE`（500）、`KB_CHUNK_OVERLAP`（50）。
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8000/api/auth/login -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"admin123"}' | python -c "import sys,json;print(json.load(sys.stdin)['data']['access_token'])")
+
+curl -X POST http://localhost:8000/api/kb/import \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "file=@./售后政策.md"
+# -> {"code":0,"data":{"id":1,"status":"pending",...}}
+```
 
 ## 架构要点
 

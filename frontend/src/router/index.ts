@@ -1,6 +1,8 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import LoginView from '@/views/LoginView.vue'
 import DashboardView from '@/views/DashboardView.vue'
+import ProfileView from '@/views/ProfileView.vue'
+import { isAdmin } from '@/api/auth'
 import { AUTH_KEY, TOKEN_KEY } from '@/api/request'
 
 // 重新导出，保持现有 `import { AUTH_KEY } from '@/router'` 的调用点无需改动
@@ -29,6 +31,12 @@ const router = createRouter({
       component: DashboardView,
       meta: { title: '运营概览', requiresAuth: true },
     },
+    {
+      path: '/profile',
+      name: 'profile',
+      component: ProfileView,
+      meta: { title: '个人中心', requiresAuth: true },
+    },
     { path: '/:pathMatch(.*)*', redirect: '/dashboard' },
   ],
 })
@@ -39,6 +47,10 @@ router.beforeEach((to) => {
   }
   if (to.name === 'login' && isAuthenticated()) {
     return { name: 'dashboard' }
+  }
+  // 知识库管理仅管理员可访问：直接改 URL 也会被重定向回个人信息页
+  if (to.name === 'profile' && to.query.tab === 'kb' && !isAdmin()) {
+    return { name: 'profile', query: {} }
   }
 })
 

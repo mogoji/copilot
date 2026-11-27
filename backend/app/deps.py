@@ -49,3 +49,17 @@ def get_current_user(
     if not payload.get("sub"):
         raise unauthorized
     return payload
+
+
+def require_admin(user: dict = Depends(get_current_user)) -> dict:
+    """管理员权限校验：仅在 JWT 中 role=admin 时放行，否则 403。
+
+    前端隐藏入口只是体验层，真正的权限边界在这里——即使普通用户直接
+    构造请求，也会被拒绝。
+    """
+    if user.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="需要管理员权限",
+        )
+    return user

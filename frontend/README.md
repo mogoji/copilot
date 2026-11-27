@@ -97,6 +97,7 @@ pnpm format
 | --- | --- | --- |
 | `/login` | 登录页 | 品牌展示 + 登录表单，支持记住密码、Caps Lock 提示 |
 | `/dashboard` | 仪表盘 | KPI 卡片、销售趋势图、订单列表、渠道分布、待办事项 |
+| `/profile` | 个人中心 | 顶部模块导航：个人信息 / 知识库管理（仅 admin 可见） |
 
 ### 演示账号
 
@@ -148,3 +149,4 @@ frontend/
 - **登录接口**：`POST /api/auth/login`，body `{ "username", "password" }`，成功返回 `data.access_token` + `data.user`，封装在 `src/api/auth.ts`。
 - **智能客服**：仪表盘右上角悬浮机器人入口（`src/components/CustomerServiceWidget.vue`），点击弹出对话窗口，直接调用后端 `POST /chat/stream` 的 SSE 流式接口，解析 `sources` / `token` / `error` 事件；地址可用 `VITE_CHAT_URL` 覆盖（默认 `http://localhost:8000/chat/stream`）。回答展示模式由 `VITE_CHAT_MODE` 控制：`sse`（默认，逐字流式渲染）/ `once`（整段答案组织完成后一次性渲染），修改环境变量后需重启 dev server。
 - **启动后端**：默认 `http://localhost:8000`，详见 [backend/README.md](../backend/README.md)；演示账号 `admin / admin123` 由后端启动时自动 seed。
+- **知识库管理（仅 admin）**：`/profile?tab=kb` 页面（`src/components/KnowledgeBasePanel.vue`）支持拖拽上传 PDF / Word / Excel / Markdown，前端先做格式与大小（默认 10MB）预校验，再由后端复验魔数；点击「导入入库」后轮询 `GET /api/kb/jobs/{id}` 展示阶段与进度，完成后显示成功/失败条数，历史记录可查看详情、重试失败任务，并可展开操作审计日志。普通用户的入口与路由均被隐藏，直接访问 `?tab=kb` 会被重定向回个人信息页（后端同时以 403 兜底）。

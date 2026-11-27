@@ -24,6 +24,7 @@
 | 登录认证 | JWT 无状态登录，bcrypt 存密码，登录态持久化（记住我 → localStorage / 否则 sessionStorage） |
 | 运营概览 | 数据看板页面（**当前为前端演示数据**，见[已知限制](#已知限制)） |
 | 智能客服 | 悬浮对话框，SSE 流式输出，支持中途停止、快捷问题、引用来源展开 |
+| 知识库管理 | 管理员上传 PDF / Word / Excel / Markdown，后台完成解析、分片、向量化、入库，带进度轮询、历史、失败重试与审计日志 |
 | RAG 问答 | 向量检索 Top-5 → 阈值过滤 → 拼证据 → 流式生成，无依据自动拒答 |
 | 评测脚本 | 检索层（Recall@5 / MRR）与端到端（命中率 / 引用率 / 拒答率 / 伪证据数） |
 
@@ -83,6 +84,7 @@ aftersales-copilot/
 │   │   ├── config.py          # 集中配置（fail-fast 校验 + 阈值 clamp）
 │   │   ├── schemas.py         # Pydantic 模型 + 统一响应壳
 │   │   ├── rag.py             # 向量检索（+ 未启用的混合检索）
+│   │   ├── kb.py              # 知识库导入：上传校验 → 解析 → 分片 → 向量化 → 入库（后台任务）
 │   │   ├── ingest.py          # 灌库脚本：切片 → embedding → 入库
 │   │   ├── eval_retrieval.py  # 检索层评测（快、不花钱）
 │   │   ├── eval_e2e.py        # 端到端评测（走真实接口）
@@ -94,10 +96,10 @@ aftersales-copilot/
 │   └── pyproject.toml / uv.lock
 ├── frontend/
 │   └── src/
-│       ├── views/             # LoginView、DashboardView
-│       ├── components/        # CustomerServiceWidget（SSE 对话）、BrandLogo
-│       ├── api/               # axios 封装 + 401 拦截 + 登录接口
-│       └── router/            # 路由守卫
+│       ├── views/             # LoginView、DashboardView、ProfileView（含知识库管理 Tab）
+│       ├── components/        # CustomerServiceWidget（SSE 对话）、KnowledgeBasePanel（知识库管理）、BrandLogo
+│       ├── api/               # axios 封装 + 401 拦截 + 登录 / 知识库接口
+│       └── router/            # 路由守卫（普通用户进不了知识库 Tab）
 └── docker-compose.yml         # 仅数据库（pgvector/pg16）
 ```
 
@@ -236,6 +238,35 @@ curl -N -X POST http://localhost:8000/chat/stream \
 
 `/health` 探库而不是只回一个写死的 `{"ok": true}`，是因为后者在数据库挂掉时仍然报健康——探针等于没有。实测：停掉 DB 容器后 `/health` 2.0s 返 503、`/health/live` 仍 2ms 返 200；DB 重启后 1s 内 `/health` 自动转绿（连接池的 `check` 会丢弃坏连接并重连）。
 
+### 知识库管理（全部需管理员）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/kb/import` | `multipart/form-data` 上传，支持 PDF / DOCX / XLSX / MD，单文件 ≤ 10MB；**立即返回任务**，解析与向量化在后台线程跑 |
+| GET | `/api/kb/jobs?page=1&page_size=8` | 导入历史（分页，按 id 倒序） |
+| GET | `/api/kb/jobs/{id}` | 任务进度：`status` / `stage`（queued→parsing→chunking→embedding→writing）/ `progress` / 成功与失败片数 |
+| POST | `/api/kb/jobs/{id}/retry` | 仅失败任务可重试；原始文件已被删除时返回 400 |
+| GET | `/api/kb/audit-logs?limit=50` | 操作审计（上传、完成、失败、重试） |
+| GET | `/api/kb/stats` | 已入库文件数与分片数 |
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"<演示口令>"}' | python -c "import sys,json;print(json.load(sys.stdin)['data']['access_token'])")
+
+curl -X POST http://localhost:8000/api/kb/import \
+  -H "Authorization: Bearer $TOKEN" -F "file=@售后客服常见问题FAQ手册.docx"   # → data.id
+curl http://localhost:8000/api/kb/jobs/1 -H "Authorization: Bearer $TOKEN"   # 轮询进度
+```
+
+几个实现取舍：
+
+- **权限边界在后端**：六个接口全挂 `require_admin`，普通用户直接构造请求也是 403；前端隐藏入口只是体验层。
+- **双层文件校验**：先看扩展名白名单，再验魔数（PDF 必须 `%PDF`、docx/xlsx 必须是 zip 头），改后缀骗不过去；落盘用 uuid 文件名，不拼原始名，避免路径穿越与重名覆盖。
+- **后台任务 + 轮询**：一次 embedding 要几十秒，放进请求里会卡死 HTTP；接口立即返回 `job_id`，前端 900ms 轮询一次。
+- **写入复用 `documents` / `chunks`**：导入完 `rag.retrieve` 不用改一行就能命中；每个分片独立事务，单片失败只记失败数，不影响其余分片，便于「部分成功」。
+- **实测**：13.7KB 的 FAQ 手册 → 7 个分片，上传返回 419ms，入库完成 1.7s；7/7 成功、0 失败。
+
 ## 效果评测
 
 两条命令即可复现（需先 `uv run uvicorn` 起服务）：
@@ -348,7 +379,7 @@ uv run python -m app.eval_norag       # no-RAG 对照组，70 条，约 17 分�
 2. **运营概览页是演示数据**：除登录与问答外，看板指标未接后端接口，属静态占位。
 3. **无自动化测试与 CI**：评测脚本是"能跑但不在门禁里"，改动后靠人记得跑。
 4. **单轮问答**：不携带历史消息，追问「那运费呢」不会结合上文。
-5. **知识库只能整库重灌**：`ingest.py` 是 TRUNCATE + 全量插入，没有增量更新；也没有 PDF/Word 解析、chunk 长度与重叠策略（一条 FAQ = 一个 chunk）。
+5. **知识库缺少版本管理**：上传即可入库，但没有删除 / 回滚接口，也不按文件去重——同一个文件传两次就是两份分片；分片长度是全局配置（默认 500 字），FAQ 这类短问答会被合并进同一片而稀释检索精度（实测同一问题：500 字分片相似度 0.594，300 字分片 0.664 且排名第 1）。
 6. **未做 rerank / query 改写 / 多路召回**，也未做限流与配额——公网长期暴露前需要补。
 7. **阈值挡不住域内硬负例**：25 条应拒答里 13 条被检索层放过（可拒答率 0.48），端到端能全拒是靠 prompt 单点兜底。prompt 一改、模型一换，这个 1.000 就可能掉——这是当前方案最脆的地方。
 8. **命中判定不是 LLM 判官**：`answer_hit_rate` 靠 gold 子序列匹配，措辞差异仍可能带来 ±1 条误差，适合看趋势、不适合比小数点。
@@ -361,6 +392,8 @@ uv run python -m app.eval_norag       # no-RAG 对照组，70 条，约 17 分�
 - [x] 补域内硬负例（15 条）并把阈值校准从两点对比升级为扫描曲线 —— 已完成，结论是 0.60 对域外有效、对域内无效
 - [ ] 把硬负例里「知识库本该有」的（会员价格、分期期数）补进 FAQ，让它们从负例转成正例
 - [ ] 打通一条真实业务接口（订单列表），让看板不再是静态数据
+- [ ] 知识库删除 / 回滚 + 按文件去重（现在传重了只能手工删库）
+- [ ] 分片粒度按文档类型自适应：FAQ 类一条一片，长文档再按段落聚合
 - [ ] pytest + GitHub Actions：覆盖阈值 clamp、登录、401 与评测回归
 - [ ] Dockerfile + nginx 反向代理（SSE 需 `proxy_buffering off`），做到一键部署
 

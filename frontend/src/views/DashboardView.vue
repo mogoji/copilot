@@ -550,7 +550,7 @@ onBeforeUnmount(() => {
                   <p class="text-sm font-semibold text-ink-900">系统管理员</p>
                   <p class="mt-1 text-[11px] text-slate-400">admin@self-operated.cn</p>
                 </div>
-                <button type="button" class="mt-2 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-xs text-ink-700 transition hover:bg-slate-50" @click="notify('个人中心演示入口'); userMenuOpen = false">
+                <button type="button" class="mt-2 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-xs text-ink-700 transition hover:bg-slate-50" @click="router.push('/profile'); userMenuOpen = false">
                   <UserRound class="size-4 text-slate-400" /> 个人中心
                 </button>
                 <button type="button" class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-xs text-ink-700 transition hover:bg-slate-50" @click="notify('账号设置演示入口'); userMenuOpen = false">

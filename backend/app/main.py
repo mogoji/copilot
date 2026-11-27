@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, StringConstraints
 from app import auth
 from app import config
 from app import db
+from app import kb
 from app import rag
 from app.deps import get_current_user
 
@@ -47,6 +48,8 @@ async def lifespan(app: FastAPI):
     app.state.glm_client = httpx.AsyncClient(timeout=config.HTTP_TIMEOUT)
     # 初始化 users 表与种子管理员账号：同步 DB 操作放工作线程，不阻塞事件循环
     await asyncio.to_thread(auth.ensure_admin_seed)
+    # 知识库导入任务表 / 审计表 + 上传目录（幂等）
+    await asyncio.to_thread(kb.ensure_tables)
     logger.info("应用启动，GLM 客户端已就绪")
     try:
         yield
@@ -68,6 +71,8 @@ app.add_middleware(
 
 # 挂载认证路由（/api/auth/login 等）
 app.include_router(auth.router)
+# 挂载知识库管理路由（/api/kb/*，全部要求 admin 角色）
+app.include_router(kb.router)
 
 
 # ---- 统一异常处理：HTTP 错误与参数校验错误都包成 { code, message, data } ----
@@ -146,7 +151,7 @@ def health():
             },
         )
 
-    return {"ok": True, "db": "up", "has_chunks": True}
+    return {"ok": True, "db": "up", "has_chunks": True, "rag": config.ENABLE_RAG}
 
 
 @app.get("/health/live", summary="存活检查（不探依赖）")
@@ -165,32 +170,43 @@ async def chat(req: ChatRequest, current_user: dict = Depends(get_current_user))
     question = req.q
     th = _resolve_threshold(req.evidence_th)
 
-    # ① 检索证据：同步函数放到工作线程执行，不阻塞事件循环；DB 走连接池复用
-    try:
-        hits = await asyncio.to_thread(rag.retrieve, question, top_k=5)
-    except Exception:
-        logger.exception("检索失败 user=%s question=%r", current_user.get("sub"), question)
+    if config.ENABLE_RAG:
+        # ① 检索证据：同步函数放到工作线程执行，不阻塞事件循环；DB 走连接池复用
+        try:
+            hits = await asyncio.to_thread(rag.retrieve, question, top_k=5)
+        except Exception:
+            logger.exception(
+                "检索失败 user=%s question=%r", current_user.get("sub"), question
+            )
 
-        async def gen_err():
-            yield _sse({"error": "检索服务暂不可用，请稍后重试"})
-            yield "data: [DONE]\n\n"
+            async def gen_err():
+                yield _sse({"error": "检索服务暂不可用，请稍后重试"})
+                yield "data: [DONE]\n\n"
 
-        return StreamingResponse(gen_err(), media_type="text/event-stream")
+            return StreamingResponse(gen_err(), media_type="text/event-stream")
 
-    good = [h for h in hits if h["similarity"] >= th]
-    # 拼成带编号的资料块
-    evidence = "\n".join(f"[{i}] {h['content']}" for i, h in enumerate(good, 1))
-    sources = [
-        {"index": i, "content": h["content"], "similarity": h["similarity"]}
-        for i, h in enumerate(good, 1)
-    ]
+        good = [h for h in hits if h["similarity"] >= th]
+        # 拼成带编号的资料块
+        evidence = "\n".join(f"[{i}] {h['content']}" for i, h in enumerate(good, 1))
+        sources = [
+            {"index": i, "content": h["content"], "similarity": h["similarity"]}
+            for i, h in enumerate(good, 1)
+        ]
 
-    # ② 拼 prompt：明确要求"只根据资料回答 + 标引用编号 + 无资料就说不知道"
-    system = (
-        "你是售后客服助手。只能根据下面的资料回答问题，回答时标注引用编号如[1]。"
-        "如果资料里没有相关信息，直接说『抱歉，资料中没有相关信息，建议联系人工客服』，不要编造。\n\n"
-        f"资料：\n{evidence if evidence else '（无相关资料）'}"
-    )
+        # ② 拼 prompt：明确要求"只根据资料回答 + 标引用编号 + 无资料就说不知道"
+        system = (
+            "你是售后客服助手。只能根据下面的资料回答问题，回答时标注引用编号如[1]。"
+            "如果资料里没有相关信息，直接说『抱歉，资料中没有相关信息，建议联系人工客服』，不要编造。\n\n"
+            f"资料：\n{evidence if evidence else '（无相关资料）'}"
+        )
+    else:
+        # RAG 关闭：不检索、不碰数据库，直接让模型凭自身知识回答，便于与开启时对照
+        logger.info("RAG 已关闭，直接调用模型 user=%s", current_user.get("sub"))
+        sources = []
+        system = (
+            "你是售后客服助手。请直接回答用户的售后问题。"
+            "不确定的内容要明确说明无法确认，并建议联系人工客服，不要编造。"
+        )
 
     glm_client: httpx.AsyncClient = app.state.glm_client
 

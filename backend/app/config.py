@@ -5,6 +5,7 @@
 避免请求运行时才出现难以定位的 401 / 连接失败。
 """
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -25,6 +26,17 @@ HEADERS = {
     "Authorization": f"Bearer {GLM_API_KEY}",
     "Content-Type": "application/json",
 }
+
+# ---- RAG 开关 ----
+# true（默认）：检索知识库，把达到阈值的证据喂给模型并返回引用来源；
+# false：完全跳过检索，直接让模型凭自身知识回答，用于与 RAG 效果做对照。
+# 关闭后 /chat/stream 不访问数据库，DB 不可用时也能正常对话（仅 /health 仍会探库）。
+ENABLE_RAG = os.getenv("ENABLE_RAG", "true").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 
 # ---- 检索阈值 ----
 # 证据阈值：低于此相似度的检索结果不喂给模型（防幻觉第一道闸）。
@@ -53,6 +65,17 @@ DB_DSN = os.getenv("DATABASE_URL") or (
 # ---- 数据库连接池 ----
 DB_POOL_MIN = int(os.getenv("DB_POOL_MIN", "1"))
 DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "10"))
+
+# ---- 知识库导入 ----
+# 单文件大小上限（MB），超限直接 413 拦截
+KB_MAX_FILE_MB = int(os.getenv("KB_MAX_FILE_MB", "10"))
+# 分片长度（字符）与相邻分片重叠长度：按段落聚合，超长段落再按滑动窗口切
+KB_CHUNK_SIZE = int(os.getenv("KB_CHUNK_SIZE", "500"))
+KB_CHUNK_OVERLAP = int(os.getenv("KB_CHUNK_OVERLAP", "50"))
+# 上传文件落盘目录：默认 backend/storage/kb（已 gitignore）
+KB_STORAGE_DIR = os.getenv(
+    "KB_STORAGE_DIR", str(Path(__file__).resolve().parent.parent / "storage" / "kb")
+)
 
 # ---- CORS ----
 # 前端 dev server 可能用 localhost 或 127.0.0.1，默认两者都放行；

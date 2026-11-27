@@ -52,3 +52,40 @@ CREATE TABLE IF NOT EXISTS users (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS users_username_idx ON users (username);
+
+-- =====================================================================
+-- 6. 知识库导入任务表：一次上传对应一条任务，记录进度与结果
+--    应用启动时 kb.ensure_tables() 也会幂等建表，这里保留供全新部署参考。
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS kb_import_jobs (
+    id             SERIAL PRIMARY KEY,
+    filename       TEXT NOT NULL,
+    stored_path    TEXT NOT NULL,
+    file_size      BIGINT NOT NULL DEFAULT 0,
+    ext            VARCHAR(16) NOT NULL,
+    status         VARCHAR(16) NOT NULL DEFAULT 'pending',  -- pending/processing/success/failed
+    stage          VARCHAR(16) NOT NULL DEFAULT 'queued',   -- queued/parsing/chunking/embedding/writing
+    progress       INTEGER NOT NULL DEFAULT 0,
+    total_chunks   INTEGER NOT NULL DEFAULT 0,
+    success_chunks INTEGER NOT NULL DEFAULT 0,
+    failed_chunks  INTEGER NOT NULL DEFAULT 0,
+    error_detail   TEXT NOT NULL DEFAULT '',
+    operator       VARCHAR(64) NOT NULL,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    started_at     TIMESTAMPTZ,
+    finished_at    TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS kb_import_jobs_created_idx
+    ON kb_import_jobs (created_at DESC);
+
+-- 7. 知识库审计日志：导入 / 重试 / 完成 / 失败等关键操作留痕
+CREATE TABLE IF NOT EXISTS kb_audit_logs (
+    id         SERIAL PRIMARY KEY,
+    operator   VARCHAR(64) NOT NULL,
+    action     VARCHAR(32) NOT NULL,
+    target     TEXT NOT NULL DEFAULT '',
+    detail     TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS kb_audit_logs_created_idx
+    ON kb_audit_logs (created_at DESC);

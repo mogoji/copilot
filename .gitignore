@@ -7,6 +7,9 @@ dist/
 *.pyc
 .pytest_cache/
 
+# 知识库上传文件（运行时产物）
+backend/storage/
+
 # 开发日志与过程截图：仅本地留存，不纳入 Git 追踪
 logs.md
 .screenshots/
